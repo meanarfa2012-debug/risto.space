@@ -12,6 +12,8 @@ const STATUS = {
   accepted: { label: "مقبول · ادفع عند الوصول", color: "bg-emerald-100 text-emerald-700" },
   rejected: { label: "مرفوض", color: "bg-destructive/10 text-destructive" },
   cancelled: { label: "ملغي", color: "bg-muted text-inkSoft" },
+  completed: { label: "مكتمل", color: "bg-forest/10 text-forest" },
+  expired: { label: "منتهي", color: "bg-muted text-inkSoft" },
 };
 
 export default function MyBookings() {

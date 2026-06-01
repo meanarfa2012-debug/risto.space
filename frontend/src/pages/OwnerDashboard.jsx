@@ -52,6 +52,24 @@ export default function OwnerDashboard() {
     catch (e) { toast.error(e?.response?.data?.detail || "تعذر الرفض"); }
   };
 
+  const ownerCancel = async (id) => {
+    if (!confirm("إلغاء هذا الحجز؟ سيتم إعلام العميل وإعادة فتح الموعد للحجز.")) return;
+    try { await api.post(`/bookings/${id}/owner-cancel`); toast.success("تم إلغاء الحجز"); load(); }
+    catch (e) { toast.error(e?.response?.data?.detail || "تعذر الإلغاء"); }
+  };
+
+  const complete = async (id) => {
+    if (!confirm("هل تأكدت من انتهاء إقامة الضيف؟")) return;
+    try { await api.post(`/bookings/${id}/complete`); toast.success("تم إنهاء الحجز"); load(); }
+    catch (e) { toast.error(e?.response?.data?.detail || "تعذرت العملية"); }
+  };
+
+  const removeBooking = async (id) => {
+    if (!confirm("حذف سجل الحجز نهائياً؟")) return;
+    try { await api.delete(`/bookings/${id}`); toast.success("تم الحذف"); load(); }
+    catch (e) { toast.error(e?.response?.data?.detail || "تعذر الحذف"); }
+  };
+
   const del = async (id) => {
     if (!confirm("هل أنت متأكد من حذف هذا الشاليه؟")) return;
     try { await api.delete(`/chalets/${id}`); toast.success("تم الحذف"); load(); }
@@ -196,7 +214,7 @@ export default function OwnerDashboard() {
                       <TableCell>{b.total_price?.toLocaleString("ar")} ₪</TableCell>
                       <TableCell><BookingBadge status={b.status} /></TableCell>
                       <TableCell>
-                        {b.status === "pending" ? (
+                        {b.status === "pending" && (
                           <div className="flex gap-1.5">
                             <Button size="sm" data-testid={`accept-${b.id}`} onClick={() => accept(b.id)} className="bg-forest text-bone hover:bg-forest-dark h-8 gap-1">
                               <Check size={12} /> قبول
@@ -205,8 +223,21 @@ export default function OwnerDashboard() {
                               <X size={12} /> رفض
                             </Button>
                           </div>
-                        ) : (
-                          <span className="text-xs text-inkSoft">—</span>
+                        )}
+                        {b.status === "accepted" && (
+                          <div className="flex gap-1.5">
+                            <Button size="sm" data-testid={`complete-${b.id}`} onClick={() => complete(b.id)} className="bg-gold text-forest hover:bg-gold-dark h-8 gap-1">
+                              <Check size={12} /> إنهاء
+                            </Button>
+                            <Button size="sm" variant="outline" data-testid={`owner-cancel-${b.id}`} onClick={() => ownerCancel(b.id)} className="h-8 gap-1 text-destructive border-destructive/30">
+                              <X size={12} /> إلغاء
+                            </Button>
+                          </div>
+                        )}
+                        {["cancelled", "rejected", "completed", "expired"].includes(b.status) && (
+                          <Button size="sm" variant="outline" data-testid={`remove-${b.id}`} onClick={() => removeBooking(b.id)} className="h-8 gap-1 text-inkSoft">
+                            <Trash2 size={12} /> حذف
+                          </Button>
                         )}
                       </TableCell>
                     </TableRow>
@@ -239,6 +270,8 @@ function BookingBadge({ status }) {
     accepted: { label: "مقبول", color: "bg-emerald-100 text-emerald-700" },
     rejected: { label: "مرفوض", color: "bg-destructive/10 text-destructive" },
     cancelled: { label: "ملغي", color: "bg-muted text-inkSoft" },
+    completed: { label: "مكتمل", color: "bg-forest/10 text-forest" },
+    expired: { label: "منتهي", color: "bg-muted text-inkSoft" },
   };
   const c = map[status] || map.pending;
   return <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${c.color}`}>{c.label}</span>;

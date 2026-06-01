@@ -424,6 +424,8 @@ async def _update_starting_price(chalet_id: str):
 
 @api.get("/chalets/{chalet_id}/slots")
 async def list_slots(chalet_id: str, date: Optional[str] = None, status: Optional[str] = None):
+    # Release slots whose bookings have expired so future viewers see them as available
+    await _expire_past_bookings({"chalet_id": chalet_id})
     q = {"chalet_id": chalet_id}
     if date:
         q["date"] = date
@@ -557,11 +559,13 @@ async def create_booking(payload: BookingCreate, user: dict = Depends(require_ro
 
 @api.get("/bookings/me")
 async def my_bookings(user: dict = Depends(require_role("customer"))):
+    await _expire_past_bookings({"customer_id": user["id"]})
     return await bookings_col.find({"customer_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=200)
 
 
 @api.get("/bookings/owner")
 async def owner_bookings(user: dict = Depends(require_role("owner"))):
+    await _expire_past_bookings({"owner_id": user["id"]})
     return await bookings_col.find({"owner_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=200)
 
 
@@ -570,6 +574,53 @@ async def _release_slot(slot_id: str):
         {"id": slot_id},
         {"$set": {"status": "available", "booking_id": None}},
     )
+
+
+async def _expire_past_bookings(query: dict | None = None) -> None:
+    """Auto-finalize bookings whose slot date+end_time is in the past.
+
+    - Accepted bookings whose time has fully elapsed become 'completed'
+      and their slot is released back to 'available'.
+    - Pending bookings whose start time has passed (owner never responded)
+      become 'expired' and the slot is released.
+
+    This is idempotent and safe to call on every list request.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    now = _dt.now(_tz.utc)
+    today = now.strftime("%Y-%m-%d")
+    hhmm_now = now.strftime("%H:%M")
+
+    base = dict(query or {})
+
+    # 1) Auto-complete past ACCEPTED bookings
+    accepted_q = {
+        **base,
+        "status": "accepted",
+        "$or": [
+            {"slot_date": {"$lt": today}},
+            {"slot_date": today, "slot_end": {"$lte": hhmm_now}},
+        ],
+    }
+    async for b in bookings_col.find(accepted_q, {"id": 1, "slot_id": 1, "chalet_id": 1, "_id": 0}):
+        await bookings_col.update_one({"id": b["id"]}, {"$set": {"status": "completed"}})
+        await _release_slot(b["slot_id"])
+        await _update_starting_price(b["chalet_id"])
+
+    # 2) Auto-expire PENDING bookings whose start time has passed
+    pending_q = {
+        **base,
+        "status": "pending",
+        "$or": [
+            {"slot_date": {"$lt": today}},
+            {"slot_date": today, "slot_start": {"$lte": hhmm_now}},
+        ],
+    }
+    async for b in bookings_col.find(pending_q, {"id": 1, "slot_id": 1, "chalet_id": 1, "_id": 0}):
+        await bookings_col.update_one({"id": b["id"]}, {"$set": {"status": "expired"}})
+        await _release_slot(b["slot_id"])
+        await _update_starting_price(b["chalet_id"])
 
 
 @api.post("/bookings/{booking_id}/accept")
@@ -627,6 +678,65 @@ async def cancel_booking(booking_id: str, user: dict = Depends(require_role("cus
         f"قام العميل {booking['customer_name']} بإلغاء حجز شاليه {booking['chalet_name']}.",
         link="/owner/dashboard",
     )
+    return {"ok": True}
+
+
+@api.post("/bookings/{booking_id}/owner-cancel")
+async def owner_cancel_booking(booking_id: str, user: dict = Depends(require_role("owner"))):
+    """Owner cancels an accepted or pending booking (e.g. emergency, double-booking offline)."""
+    booking = await bookings_col.find_one({"id": booking_id})
+    if not booking or booking["owner_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+    if booking["status"] not in ("pending", "accepted"):
+        raise HTTPException(status_code=400, detail="لا يمكن إلغاء هذا الحجز في حالته الحالية")
+    await bookings_col.update_one({"id": booking_id}, {"$set": {"status": "cancelled"}})
+    await _release_slot(booking["slot_id"])
+    await _update_starting_price(booking["chalet_id"])
+    await push_notification(
+        booking["customer_id"], "customer",
+        "booking_cancelled_by_owner",
+        "تم إلغاء حجزك من قبل المالك",
+        f"تم إلغاء حجزك لشاليه {booking['chalet_name']} ({booking['slot_date']}) من قبل المالك. نعتذر عن الإزعاج.",
+        link="/my-bookings",
+    )
+    return {"ok": True}
+
+
+@api.post("/bookings/{booking_id}/complete")
+async def complete_booking(booking_id: str, user: dict = Depends(require_role("owner"))):
+    """Owner marks an accepted booking as completed (the guest has finished their stay)."""
+    booking = await bookings_col.find_one({"id": booking_id})
+    if not booking or booking["owner_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+    if booking["status"] != "accepted":
+        raise HTTPException(status_code=400, detail="يمكن إنهاء الحجز المقبول فقط")
+    await bookings_col.update_one({"id": booking_id}, {"$set": {"status": "completed"}})
+    await _release_slot(booking["slot_id"])
+    await _update_starting_price(booking["chalet_id"])
+    await push_notification(
+        booking["customer_id"], "customer",
+        "booking_completed",
+        "نتمنى لك إقامة سعيدة!",
+        f"تم إنهاء حجزك لشاليه {booking['chalet_name']}. شاركنا تجربتك بتقييم!",
+        link="/my-bookings",
+    )
+    return {"ok": True}
+
+
+@api.delete("/bookings/{booking_id}")
+async def delete_booking(booking_id: str, user: dict = Depends(get_current_user)):
+    """Remove a booking record. Allowed only for terminal-state bookings
+    (cancelled / rejected / completed / expired) and only by the owner or admin."""
+    booking = await bookings_col.find_one({"id": booking_id})
+    if not booking:
+        raise HTTPException(status_code=404, detail="الحجز غير موجود")
+    is_admin = user["role"] == "admin"
+    is_owner = user["role"] == "owner" and booking["owner_id"] == user["id"]
+    if not (is_admin or is_owner):
+        raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
+    if booking["status"] not in ("cancelled", "rejected", "completed", "expired"):
+        raise HTTPException(status_code=400, detail="لا يمكن حذف حجز نشط — قم بإلغائه أولاً")
+    await bookings_col.delete_one({"id": booking_id})
     return {"ok": True}
 
 
@@ -819,6 +929,7 @@ async def admin_users(user: dict = Depends(require_role("admin"))):
 
 @api.get("/admin/bookings")
 async def admin_bookings(user: dict = Depends(require_role("admin"))):
+    await _expire_past_bookings()
     return await bookings_col.find({}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=500)
 
 

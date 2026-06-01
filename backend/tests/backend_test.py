@@ -26,6 +26,14 @@ OWNER_EMAIL = f"TEST_owner_{RUN}@resto.test"
 OWNER_PASSWORD = "Owner12345"
 CUSTOMER_PHONE = f"05000{RUN[:5]}"
 
+# Far-future test dates so auto-expiry never trips legacy slot fixtures
+from datetime import datetime as _now, timezone as _tz, timedelta as _td
+_BASE = _now.now(_tz.utc) + _td(days=120)
+FUT_D1 = _BASE.strftime("%Y-%m-%d")
+FUT_D2 = (_BASE + _td(days=1)).strftime("%Y-%m-%d")
+FUT_D3 = (_BASE + _td(days=2)).strftime("%Y-%m-%d")
+FUT_D4 = (_BASE + _td(days=10)).strftime("%Y-%m-%d")
+
 state = {}
 
 
@@ -199,7 +207,7 @@ def test_customer_cannot_create_slot(s):
 def test_create_slot(s):
     h = {"Authorization": f"Bearer {state['owner_token']}"}
     r = s.post(f"{API}/chalets/{state['chalet_id']}/slots", json={
-        "date": "2026-06-01", "start_time": "10:00", "end_time": "18:00", "price": 500, "notes": "صباحي"
+        "date": FUT_D1, "start_time": "10:00", "end_time": "18:00", "price": 500, "notes": "صباحي"
     }, headers=h)
     assert r.status_code == 200, r.text
     data = r.json()
@@ -209,7 +217,7 @@ def test_create_slot(s):
 
     # Second slot at higher price
     r2 = s.post(f"{API}/chalets/{state['chalet_id']}/slots", json={
-        "date": "2026-06-02", "start_time": "10:00", "end_time": "18:00", "price": 800
+        "date": FUT_D2, "start_time": "10:00", "end_time": "18:00", "price": 800
     }, headers=h)
     assert r2.status_code == 200
     state["slot2_id"] = r2.json()["id"]
@@ -246,9 +254,9 @@ def test_list_chalets_price_filter(s):
 
 
 def test_date_filter(s):
-    r = s.get(f"{API}/chalets", params={"date": "2026-06-01"})
+    r = s.get(f"{API}/chalets", params={"date": FUT_D1})
     assert state["chalet_id"] in [c["id"] for c in r.json()]
-    r2 = s.get(f"{API}/chalets", params={"date": "2030-01-01"})
+    r2 = s.get(f"{API}/chalets", params={"date": "2099-01-01"})
     assert state["chalet_id"] not in [c["id"] for c in r2.json()]
 
 
@@ -270,7 +278,7 @@ def test_create_booking_with_slot_and_three_notifications(s):
     assert data["status"] == "pending"
     assert data["slot_id"] == state["slot_id"]
     assert data["total_price"] == 500.0
-    assert data["slot_date"] == "2026-06-01"
+    assert data["slot_date"] == FUT_D1
     assert "check_in" not in data and "check_out" not in data and "nights" not in data
     state["booking_id"] = data["id"]
 
@@ -423,7 +431,7 @@ def test_admin_delete_chalet_cascades_slots(s):
     }, headers=h_o)
     cid = rc.json()["id"]
     rs = s.post(f"{API}/chalets/{cid}/slots", json={
-        "date": "2026-07-01", "start_time": "10:00", "end_time": "12:00", "price": 100
+        "date": FUT_D4, "start_time": "10:00", "end_time": "12:00", "price": 100
     }, headers=h_o)
     sid = rs.json()["id"]
 
@@ -433,6 +441,231 @@ def test_admin_delete_chalet_cascades_slots(s):
     # slot list should not contain sid
     sl = s.get(f"{API}/chalets/{cid}/slots").json()
     assert all(item["id"] != sid for item in sl)
+
+
+# ---------- Iteration 3: Owner-cancel / Complete / Delete / Auto-expiry ----------
+
+def _new_slot(s, chalet_id, owner_token, date_str, start="10:00", end="18:00", price=400):
+    h = {"Authorization": f"Bearer {owner_token}"}
+    r = s.post(f"{API}/chalets/{chalet_id}/slots", json={
+        "date": date_str, "start_time": start, "end_time": end, "price": price
+    }, headers=h)
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def _new_booking(s, slot_id, customer_token):
+    h = {"Authorization": f"Bearer {customer_token}"}
+    r = s.post(f"{API}/bookings", json={"slot_id": slot_id}, headers=h)
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_owner_cancel_accepted_booking_releases_slot(s):
+    """Owner cancels accepted booking -> slot released, status=cancelled, customer notified."""
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], "2026-08-10", price=350)
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    assert s.post(f"{API}/bookings/{booking_id}/accept", headers=h_o).status_code == 200
+
+    h_c = {"Authorization": f"Bearer {state['customer_token']}"}
+    before = s.get(f"{API}/notifications", headers=h_c).json()
+    before_ids = {n["id"] for n in before["items"]}
+
+    r = s.post(f"{API}/bookings/{booking_id}/owner-cancel", headers=h_o)
+    assert r.status_code == 200, r.text
+
+    # Booking status flipped
+    mine = s.get(f"{API}/bookings/me", headers=h_c).json()
+    b = next(x for x in mine if x["id"] == booking_id)
+    assert b["status"] == "cancelled"
+
+    # Slot released
+    slots = s.get(f"{API}/chalets/{state['chalet_id']}/slots").json()
+    released = next(sl for sl in slots if sl["id"] == slot_id)
+    assert released["status"] == "available"
+
+    # Customer notification
+    after = s.get(f"{API}/notifications", headers=h_c).json()
+    new = [n for n in after["items"] if n["id"] not in before_ids]
+    assert any(n["type"] == "booking_cancelled_by_owner" for n in new), new
+
+
+def test_owner_cancel_rbac(s):
+    """Another owner / customer cannot cancel someone else's booking."""
+    # Customer cannot call owner-cancel
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], "2026-08-11")
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+    h_c = {"Authorization": f"Bearer {state['customer_token']}"}
+    r = s.post(f"{API}/bookings/{booking_id}/owner-cancel", headers=h_c)
+    assert r.status_code in (401, 403)
+
+
+def test_complete_accepted_booking(s):
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], "2026-08-12", price=420)
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    s.post(f"{API}/bookings/{booking_id}/accept", headers=h_o)
+
+    r = s.post(f"{API}/bookings/{booking_id}/complete", headers=h_o)
+    assert r.status_code == 200, r.text
+
+    h_c = {"Authorization": f"Bearer {state['customer_token']}"}
+    mine = s.get(f"{API}/bookings/me", headers=h_c).json()
+    b = next(x for x in mine if x["id"] == booking_id)
+    assert b["status"] == "completed"
+
+    # Slot released
+    slots = s.get(f"{API}/chalets/{state['chalet_id']}/slots").json()
+    released = next(sl for sl in slots if sl["id"] == slot_id)
+    assert released["status"] == "available"
+
+    state["completed_booking_id"] = booking_id
+
+
+def test_complete_requires_accepted_status(s):
+    """Cannot complete a pending booking — must accept first."""
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], "2026-08-13")
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    r = s.post(f"{API}/bookings/{booking_id}/complete", headers=h_o)
+    assert r.status_code == 400
+
+
+def test_delete_only_for_terminal_bookings(s):
+    """Cannot delete a pending/accepted booking; can delete completed."""
+    # Active booking — should reject delete
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], "2026-08-14")
+    active_id = _new_booking(s, slot_id, state["customer_token"])
+
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    r = s.delete(f"{API}/bookings/{active_id}", headers=h_o)
+    assert r.status_code == 400, f"Expected 400 for active booking delete, got {r.status_code}"
+
+    # Cleanup: cancel + delete
+    s.post(f"{API}/bookings/{active_id}/owner-cancel", headers=h_o)
+
+    # Now terminal: delete should work
+    r2 = s.delete(f"{API}/bookings/{active_id}", headers=h_o)
+    assert r2.status_code == 200
+
+    # Verify gone
+    h_c = {"Authorization": f"Bearer {state['customer_token']}"}
+    mine = s.get(f"{API}/bookings/me", headers=h_c).json()
+    assert all(b["id"] != active_id for b in mine)
+
+
+def test_delete_terminal_booking_completed(s):
+    """Delete the previously completed booking — should succeed."""
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    r = s.delete(f"{API}/bookings/{state['completed_booking_id']}", headers=h_o)
+    assert r.status_code == 200
+
+
+def test_delete_rbac_customer_forbidden(s):
+    """Customer cannot delete bookings via DELETE /bookings/{id}."""
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], "2026-08-15")
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    s.post(f"{API}/bookings/{booking_id}/owner-cancel", headers=h_o)
+    # Customer tries to delete
+    h_c = {"Authorization": f"Bearer {state['customer_token']}"}
+    r = s.delete(f"{API}/bookings/{booking_id}", headers=h_c)
+    assert r.status_code in (401, 403)
+    # cleanup
+    s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
+
+
+def test_auto_expire_pending_past_booking(s):
+    """Pending booking with past slot date -> auto-flipped to expired on list; slot released."""
+    # Use yesterday's date
+    from datetime import datetime, timedelta, timezone
+    past = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], past, start="10:00", end="14:00", price=333)
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+
+    # Trigger via GET /bookings/owner
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    owner_bookings = s.get(f"{API}/bookings/owner", headers=h_o).json()
+    b = next(x for x in owner_bookings if x["id"] == booking_id)
+    assert b["status"] == "expired", f"Expected expired, got {b['status']}"
+
+    # Slot should now be available again
+    slots = s.get(f"{API}/chalets/{state['chalet_id']}/slots").json()
+    released = next(sl for sl in slots if sl["id"] == slot_id)
+    assert released["status"] == "available"
+
+    # cleanup terminal booking
+    s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
+
+
+def test_auto_complete_accepted_past_booking(s):
+    """Accepted booking with past slot date -> auto-flipped to completed; slot released."""
+    from datetime import datetime, timedelta, timezone
+    past = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], past, start="10:00", end="14:00", price=444)
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    # Accept BEFORE list-triggered auto-expiry (acceptance still works because the booking is pending at this moment)
+    s.post(f"{API}/bookings/{booking_id}/accept", headers=h_o)
+
+    # Trigger expiry via /bookings/me
+    h_c = {"Authorization": f"Bearer {state['customer_token']}"}
+    mine = s.get(f"{API}/bookings/me", headers=h_c).json()
+    b = next(x for x in mine if x["id"] == booking_id)
+    assert b["status"] == "completed", f"Expected completed, got {b['status']}"
+
+    # Slot freed
+    slots = s.get(f"{API}/chalets/{state['chalet_id']}/slots").json()
+    released = next(sl for sl in slots if sl["id"] == slot_id)
+    assert released["status"] == "available"
+
+    # cleanup
+    s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
+
+
+def test_auto_expiry_also_runs_on_admin_bookings_and_slots_listing(s):
+    """Verify auto-expiry triggers from /admin/bookings and /chalets/{id}/slots routes too."""
+    from datetime import datetime, timedelta, timezone
+    past = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], past, start="08:00", end="09:00", price=222)
+    booking_id = _new_booking(s, slot_id, state["customer_token"])
+
+    # Trigger via /chalets/{id}/slots
+    s.get(f"{API}/chalets/{state['chalet_id']}/slots")
+
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    owner_bookings = s.get(f"{API}/bookings/owner", headers=h_o).json()
+    b = next(x for x in owner_bookings if x["id"] == booking_id)
+    assert b["status"] == "expired"
+
+    # Admin listing
+    h_a = {"Authorization": f"Bearer {state['admin_token']}"}
+    admin_bookings = s.get(f"{API}/admin/bookings", headers=h_a).json()
+    assert any(x["id"] == booking_id for x in admin_bookings)
+
+    s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
+
+
+def test_starting_price_recomputed_after_owner_cancel(s):
+    """Owner cancels booking -> chalet starting_price should reflect cheapest available slot."""
+    # Lower-price slot, then book it, then owner-cancel; price should drop back.
+    cheap_slot = _new_slot(s, state["chalet_id"], state["owner_token"], "2026-09-01", price=99)
+    booking_id = _new_booking(s, cheap_slot, state["customer_token"])
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
+    s.post(f"{API}/bookings/{booking_id}/accept", headers=h_o)
+
+    # Cancel it
+    s.post(f"{API}/bookings/{booking_id}/owner-cancel", headers=h_o)
+
+    chalet = s.get(f"{API}/chalets/{state['chalet_id']}").json()
+    assert chalet["starting_price"] <= 99.0, f"starting_price not recomputed: {chalet['starting_price']}"
+
+    # cleanup
+    s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
 
 
 # ---------- Cleanup ----------

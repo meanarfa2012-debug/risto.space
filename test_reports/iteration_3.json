@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 3 testing complete. Backend pytest: 48/48 pass (100%) — all 37 legacy tests + 11 new tests for owner-cancel / complete / delete / auto-expiry / starting_price recompute / RBAC. Frontend auth role persistence verified via end-to-end Playwright on the public REACT_APP_BACKEND_URL — all 7 critical auth scenarios pass including the CRITICAL fix (owner refresh stays on /owner/dashboard) and localStorage tampering protection (fake admin role + owner token → /auth/me corrects to owner). RBAC and redirect behaviors all correct.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_expire_past_bookings uses naive UTC datetime comparison against slot_date stored as YYYY-MM-DD strings. Works correctly because both are UTC-normalized, but if slot dates are entered in a local TZ context, an owner who books a 23:30-23:59 slot might see a 30-minute drift before/after midnight. Document the assumption that slot times are UTC-aligned.",
+    "_expire_past_bookings runs on EVERY list call (GET /bookings/me, /bookings/owner, /admin/bookings, /chalets/{id}/slots). For high-traffic endpoints this is acceptable for MVP but should be replaced by a scheduled job (apscheduler/celery) once volume grows — each list call does a mongo scan + N update_one ops.",
+    "DELETE /bookings/{id} is correctly gated to terminal-state only and to admin/owner only. Customer is forbidden (verified).",
+    "POST /bookings/{id}/owner-cancel and /complete are RBAC-restricted to require_role('owner') AND owner_id match — both verified.",
+    "starting_price recompute correctly re-runs after owner-cancel and complete (verified via test_starting_price_recomputed_after_owner_cancel).",
+    "AuthContext: /auth/me on mount with cached user as instant UI is correct pattern. Cross-tab storage + resto:auth-cleared event listeners implemented well. Note: during the verifying window (~50-300ms) the ProtectedRoute shows the spinner instead of redirecting — this is the right call to prevent flicker/wrong-redirect on stale cache.",
+    "ProtectedRoute role-mismatch sends user to their canonical dashboard (admin -> /admin/dashboard, owner -> /owner/dashboard, customer -> /). Verified all three paths.",
+    "RedirectIfAuthed wraps /login, /owner/login, /owner/register, /admin/login — all redirect authed users to their dashboard. Verified.",
+    "server.py is now ~945 lines — strongly recommend splitting into routers per resource before next iteration."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (48/48)", "frontend": "100% (7/7 critical auth flows)"},
+  "test_credentials": "Admin meanarfa2012@gmail.com / maen1029384756; owners auto-registered per run via /api/auth/owner/register; customers phone-only.",
+  "seed_data_creation": "Each pytest run creates one TEST_owner_<runid>@resto.test owner, one approved chalet, many slots (~12), several bookings (most terminal and deleted by tests). test_zz_cleanup removes the chalet (cascades slots). One additional owner+empty chalet may persist from the Playwright auth run (TEST_owner... created in /owner/register but never logged out — no chalets attached).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression suite at /app/backend/tests/backend_test.py — 48 tests covering iteration 1+2+3. Run: cd /app && python -m pytest backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml. Notes: (1) Server clock is in mid-2026; use the FUT_D1..FUT_D4 helpers (now+120d) for slot dates to avoid the auto-expire path. (2) New iteration 3 testids on OwnerDashboard: complete-{id}, owner-cancel-{id}, remove-{id} (plus existing accept-{id}, reject-{id}). MyBookings statuses extend STATUS map with 'completed' (مكتمل) and 'expired' (منتهي). (3) Auto-expiry triggers in: GET /api/bookings/me, GET /api/bookings/owner, GET /api/admin/bookings, GET /api/chalets/{id}/slots, and on app startup. Pending past => expired + slot released; Accepted past => completed + slot released. (4) DELETE /api/bookings/{id} only for terminal states; customers forbidden (401/403).",
+  "rca of the issue": "No active bugs. Iteration 3 introduced two related capabilities that work together: (a) booking lifecycle now has 5 statuses + 2 auto-transitions (past-pending => expired, past-accepted => completed) implemented via _expire_past_bookings which runs lazily on every booking/slot listing endpoint; (b) AuthContext now treats the server's /auth/me response as the authoritative role, with cached localStorage user only used for instant UI on refresh. ProtectedRoute renders a spinner while loading=true so cached-but-wrong role never wins a redirect race. RedirectIfAuthed prevents an authenticated user from accidentally landing on a login page and double-logging-in as another role. The localStorage-tampering scenario was specifically verified — setting user.role='admin' while keeping an owner token still lands the user on /owner/dashboard because /auth/me overrides the cached value within ~200ms and rewrites localStorage."
+}
