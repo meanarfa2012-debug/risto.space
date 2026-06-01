@@ -17,9 +17,14 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err?.response?.status === 401) {
-      // Token invalid — clear local state
+      // Token invalid — clear local state and notify the AuthContext to drop the user
       localStorage.removeItem("resto_token");
       localStorage.removeItem("resto_user");
+      try {
+        window.dispatchEvent(new Event("resto:auth-cleared"));
+      } catch {
+        // ignore
+      }
     }
     return Promise.reject(err);
   }

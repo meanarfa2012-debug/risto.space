@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider } from "./contexts/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
+import RedirectIfAuthed from "./components/RedirectIfAuthed";
 import HomePage from "./pages/Home";
 import ChaletsList from "./pages/ChaletsList";
 import ChaletDetail from "./pages/ChaletDetail";
@@ -27,9 +28,9 @@ function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/chalets" element={<ChaletsList />} />
             <Route path="/chalets/:slug" element={<ChaletDetail />} />
-            <Route path="/login" element={<CustomerLogin />} />
-            <Route path="/owner/login" element={<OwnerAuth />} />
-            <Route path="/owner/register" element={<OwnerAuth />} />
+            <Route path="/login" element={<RedirectIfAuthed><CustomerLogin /></RedirectIfAuthed>} />
+            <Route path="/owner/login" element={<RedirectIfAuthed><OwnerAuth /></RedirectIfAuthed>} />
+            <Route path="/owner/register" element={<RedirectIfAuthed><OwnerAuth /></RedirectIfAuthed>} />
             <Route
               path="/owner/dashboard"
               element={
@@ -62,7 +63,7 @@ function App() {
                 </ProtectedRoute>
               }
             />
-            <Route path="/admin/login" element={<AdminLogin />} />
+            <Route path="/admin/login" element={<RedirectIfAuthed><AdminLogin /></RedirectIfAuthed>} />
             <Route
               path="/admin/dashboard"
               element={
