@@ -1,0 +1,117 @@
+{
+  "theme": "Light",
+  "archetype": "1 (Organic & Earthy) blended with 5 (Luxury)",
+  "design_philosophy": "Premium, modern, minimalistic, and highly professional user experience with a luxurious resort feel. The design must emphasize emotional connection, relaxation, and exclusivity through generous whitespace, high-contrast elegant typography, and carefully curated imagery.",
+  "global_rules": {
+    "direction": "rtl",
+    "language": "ar",
+    "mobile_first": true,
+    "forbidden_elements": [
+      "Purple/violet gradients",
+      "Inter/Roboto fonts",
+      "Generic UI patterns",
+      "Overly dense layouts without breathing room"
+    ]
+  },
+  "typography": {
+    "heading_font": "El Messiri, serif",
+    "body_font": "Tajawal, sans-serif",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight leading-none",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl sm:text-2xl",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-gray-500"
+    },
+    "instructions": "Import 'El Messiri' and 'Tajawal' from Google Fonts. Maintain generous line height for Arabic readability. Use font-light for elegance and font-bold strategically for contrast."
+  },
+  "color_palette": {
+    "background_primary": "#F9F8F6",
+    "background_secondary": "#FFFFFF",
+    "primary": "#1A362D",
+    "primary_hover": "#132720",
+    "accent": "#C6A87C",
+    "accent_hover": "#B3956A",
+    "text_primary": "#0F172A",
+    "text_secondary": "#475569",
+    "border": "#E2E8F0",
+    "error": "#991B1B",
+    "success": "#166534"
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous Spacing Philosophy (2-3x more spacing).",
+    "container": "max-w-7xl mx-auto px-6 sm:px-8 lg:px-12",
+    "section_padding": "py-20 lg:py-32",
+    "grid_system": {
+      "marketing": "Asymmetric Bento Grids (grid-cols-1 md:grid-cols-12 gap-8)",
+      "dashboard": "Dense Control Room Grid (grid-cols-1 md:grid-cols-4 gap-6)"
+    }
+  },
+  "surface_strategies": {
+    "header": "Crystal Glassmorphism (backdrop-blur-xl bg-white/70, border-b border-white/20) for sticky headers over images. Solid background when not overlapping.",
+    "cards": "Flat solid backgrounds with very subtle borders (border-border/40). No heavy drop shadows. Use slight lift (-translate-y-1) and shadow-lg on hover for interactive cards."
+  },
+  "components": {
+    "buttons": "Primary buttons should use the Deep Forest color (#1A362D) with Gold/White text, rounded-md, px-8 py-3. Hover states must be explicitly defined (hover:bg-[#132720]).",
+    "inputs": "Shadcn UI inputs heavily customized to remove the 'default SaaS' look. Use subtle borders, larger padding, and tailored focus rings (focus:ring-2 focus:ring-[#C6A87C]).",
+    "booking_widget": "Sticky on desktop chalet pages. High contrast, clear calls to action, prominent price display.",
+    "data_testid": "MANDATORY on all interactive and key informational elements (e.g., data-testid='booking-submit-btn')."
+  },
+  "motion": {
+    "general": "Minimalist and slow. Use Framer Motion for fade-up on scroll (y: 20, opacity: 0).",
+    "hover": "Smooth color and subtle transform transitions (duration-300 ease-out).",
+    "accessibility": "Respect prefers-reduced-motion."
+  },
+  "media": {
+    "instructions": "Use full-width cinematic hero visuals with maximum overlay opacity of bg-black/40. The imagery must feel expensive and aspirational.",
+    "image_urls": [
+      {
+        "category": "hero_architecture",
+        "url": "https://images.unsplash.com/photo-1673469110171-dbf5d19a8336?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjh8MHwxfHNlYXJjaHwzfHxsdXh1cnklMjBtb2Rlcm4lMjBjaGFsZXQlMjBleHRlcmlvciUyMGFyY2hpdGVjdHVyZXxlbnwwfHx8fDE3ODAyNzgwMDR8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Modern luxury exterior architecture, good for main hero section."
+      },
+      {
+        "category": "chalet_exterior",
+        "url": "https://images.pexels.com/photos/32361209/pexels-photo-32361209.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Wooden chalet with dramatic backdrop."
+      },
+      {
+        "category": "chalet_exterior_night",
+        "url": "https://images.pexels.com/photos/31299067/pexels-photo-31299067.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Charming wooden cabin illuminated at night."
+      },
+      {
+        "category": "interior_bedroom",
+        "url": "https://images.pexels.com/photos/29000312/pexels-photo-29000312.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Spacious luxury hotel bedroom."
+      },
+      {
+        "category": "interior_bedroom_wood",
+        "url": "https://images.pexels.com/photos/14025911/pexels-photo-14025911.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Spacious wooden bedroom with canopy."
+      },
+      {
+        "category": "outdoor_pool",
+        "url": "https://images.pexels.com/photos/35418211/pexels-photo-35418211.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Charming stone villa with pool in mountains."
+      },
+      {
+        "category": "outdoor_pool_retreat",
+        "url": "https://images.pexels.com/photos/11410735/pexels-photo-11410735.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Peaceful mountain retreat featuring a cozy cabin, swimming pool."
+      }
+    ]
+  },
+  "icons": {
+    "library": "lucide-react",
+    "style": "Minimalistic, stroke-width 1.5, avoiding filled icons to maintain an elegant and light aesthetic."
+  },
+  "instructions_to_main_agent": [
+    "Strictly implement RTL layout by adding dir='rtl' to the HTML tag and setting the lang to 'ar'.",
+    "Ensure Tailwind configuration includes the custom fonts and color palette defined here.",
+    "Do NOT use pure black (#000000) for text; use the defined text_primary (#0F172A).",
+    "All navigation and form labels must be translated to Arabic.",
+    "Incorporate data-testid attributes into all interactive components for testability.",
+    "The UI should feel calm, luxurious, and spacious. Do not clutter the screen with excessive widgets."
+  ]
+}
