@@ -1,14 +1,19 @@
 """Resto - Premium Arabic chalet booking platform - Main FastAPI server."""
+import asyncio
 import logging
 import os
 import uuid
 from pathlib import Path
 from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
+
+# Local timezone for slot comparisons (owners enter times in Palestine local time)
+LOCAL_TZ = ZoneInfo(os.environ.get("LOCAL_TZ", "Asia/Hebron"))
 
 from fastapi import (
     APIRouter,
@@ -108,9 +113,28 @@ async def on_startup():
     except Exception as e:
         logger.error("Storage init failed: %s", e)
 
+    # Background task: auto-expire past bookings every 60 seconds.
+    # Ensures bookings transition to 'completed'/'expired' even if no one views the dashboard.
+    async def _expiry_loop():
+        await asyncio.sleep(5)  # let the app finish booting
+        while True:
+            try:
+                n = await _expire_past_bookings()
+                if n:
+                    logger.info("Auto-expired %d booking(s)", n)
+            except Exception as e:
+                logger.error("Auto-expiry loop error: %s", e)
+            await asyncio.sleep(60)
+
+    app.state._expiry_task = asyncio.create_task(_expiry_loop())
+    logger.info("Background auto-expiry task started (interval=60s, tz=%s)", LOCAL_TZ)
+
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    task = getattr(app.state, "_expiry_task", None)
+    if task:
+        task.cancel()
     close_db()
 
 
@@ -442,9 +466,9 @@ async def create_slot(chalet_id: str, payload: SlotCreate, user: dict = Depends(
     if chalet["owner_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
 
-    # Validate that slot is not in the past
-    from datetime import datetime as _dt, timezone as _tz
-    now = _dt.now(_tz.utc)
+    # Validate that slot is not in the past (Palestine local time)
+    from datetime import datetime as _dt
+    now = _dt.now(LOCAL_TZ)
     today = now.strftime("%Y-%m-%d")
     hhmm_now = now.strftime("%H:%M")
     if payload.date < today:
@@ -476,8 +500,8 @@ async def create_slots_bulk(chalet_id: str, payload: SlotBulkCreate, user: dict 
     if not chalet or chalet["owner_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
 
-    from datetime import datetime as _dt, timezone as _tz
-    now = _dt.now(_tz.utc)
+    from datetime import datetime as _dt
+    now = _dt.now(LOCAL_TZ)
     today = now.strftime("%Y-%m-%d")
     hhmm_now = now.strftime("%H:%M")
 
@@ -618,21 +642,22 @@ async def _release_slot(slot_id: str):
     )
 
 
-async def _expire_past_bookings(query: dict | None = None) -> None:
-    """Auto-finalize bookings whose slot date+end_time is in the past.
+async def _expire_past_bookings(query: dict | None = None) -> int:
+    """Auto-finalize bookings whose slot date+end_time is in the past (Palestine local time).
 
     - Accepted bookings whose time has fully elapsed become 'completed'
       and their slot is released back to 'available'.
     - Pending bookings whose start time has passed (owner never responded)
       become 'expired' and the slot is released.
 
-    This is idempotent and safe to call on every list request.
+    Returns number of bookings transitioned. Idempotent.
     """
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
 
-    now = _dt.now(_tz.utc)
+    now = _dt.now(LOCAL_TZ)
     today = now.strftime("%Y-%m-%d")
     hhmm_now = now.strftime("%H:%M")
+    transitioned = 0
 
     base = dict(query or {})
 
@@ -649,6 +674,7 @@ async def _expire_past_bookings(query: dict | None = None) -> None:
         await bookings_col.update_one({"id": b["id"]}, {"$set": {"status": "completed"}})
         await _release_slot(b["slot_id"])
         await _update_starting_price(b["chalet_id"])
+        transitioned += 1
 
     # 2) Auto-expire PENDING bookings whose start time has passed
     pending_q = {
@@ -663,6 +689,9 @@ async def _expire_past_bookings(query: dict | None = None) -> None:
         await bookings_col.update_one({"id": b["id"]}, {"$set": {"status": "expired"}})
         await _release_slot(b["slot_id"])
         await _update_starting_price(b["chalet_id"])
+        transitioned += 1
+
+    return transitioned
 
 
 @api.post("/bookings/{booking_id}/accept")
