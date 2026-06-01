@@ -455,7 +455,10 @@ async def create_slot(chalet_id: str, payload: SlotCreate, user: dict = Depends(
         raise HTTPException(status_code=400, detail="وقت الانتهاء يجب أن يكون بعد البداية")
 
     data = payload.model_dump()
-    initial_status = "blocked" if data.get("block_reason") else "available"
+    is_block = bool(data.get("block_reason"))
+    if not is_block and data.get("price", 0) <= 0:
+        raise HTTPException(status_code=400, detail="السعر مطلوب للمواعيد القابلة للحجز")
+    initial_status = "blocked" if is_block else "available"
     slot = Slot(
         chalet_id=chalet_id,
         owner_id=user["id"],
@@ -472,9 +475,28 @@ async def create_slots_bulk(chalet_id: str, payload: SlotBulkCreate, user: dict 
     chalet = await chalets_col.find_one({"id": chalet_id})
     if not chalet or chalet["owner_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
+
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    today = now.strftime("%Y-%m-%d")
+    hhmm_now = now.strftime("%H:%M")
+
     docs = []
     for s in payload.slots:
-        slot = Slot(chalet_id=chalet_id, owner_id=user["id"], **s.model_dump())
+        if s.date < today or (s.date == today and s.start_time <= hhmm_now):
+            raise HTTPException(status_code=400, detail=f"موعد في الماضي: {s.date} {s.start_time}")
+        if s.start_time >= s.end_time:
+            raise HTTPException(status_code=400, detail="وقت الانتهاء يجب أن يكون بعد البداية")
+        data = s.model_dump()
+        is_block = bool(data.get("block_reason"))
+        if not is_block and data.get("price", 0) <= 0:
+            raise HTTPException(status_code=400, detail="السعر مطلوب للمواعيد القابلة للحجز")
+        slot = Slot(
+            chalet_id=chalet_id,
+            owner_id=user["id"],
+            status="blocked" if is_block else "available",
+            **data,
+        )
         docs.append(slot.model_dump())
     if docs:
         await slots_col.insert_many(docs)
