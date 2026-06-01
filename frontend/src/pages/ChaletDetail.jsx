@@ -156,8 +156,8 @@ export default function ChaletDetail() {
     ? (images[activeMedia.idx] ? fileUrl(images[activeMedia.idx]) : "https://images.unsplash.com/photo-1673469110171-dbf5d19a8336?w=2000")
     : null;
 
-  // Group slots by date, hide unavailable + blocked from public booking UI
-  const visibleSlots = slots.filter((s) => s.status === "available" || s.status === "booked");
+  // Show available + booked + blocked + unavailable, but disable non-bookable ones
+  const visibleSlots = slots;
   const groupedSlots = visibleSlots.reduce((acc, s) => {
     (acc[s.date] ||= []).push(s);
     return acc;
@@ -431,29 +431,36 @@ export default function ChaletDetail() {
                       <div className="space-y-2">
                         {groupedSlots[d].sort((a, b) => a.start_time.localeCompare(b.start_time)).map((s) => {
                           const isBooked = s.status === "booked";
+                          const isBlocked = s.status === "blocked" || s.status === "unavailable";
+                          const unavailable = isBooked || isBlocked;
+                          const label = isBooked ? "محجوز" : isBlocked ? "غير متاح" : null;
                           return (
                             <button
                               key={s.id}
                               type="button"
                               data-testid={`slot-${s.id}`}
-                              disabled={isBooked}
-                              onClick={() => !isBooked && setSelectedSlot(s)}
+                              disabled={unavailable}
+                              onClick={() => !unavailable && setSelectedSlot(s)}
                               className={`w-full text-right p-3 rounded-lg border transition flex items-center justify-between ${
-                                isBooked
+                                unavailable
                                   ? "bg-rose-50 border-rose-200 text-rose-700 cursor-not-allowed line-through opacity-80"
                                   : "bg-bone border-forest/10 hover:border-gold hover:bg-gold/5"
                               }`}
                             >
                               <div className="flex items-center gap-2 text-sm">
-                                <Clock size={12} strokeWidth={1.5} className={isBooked ? "text-rose-500" : "text-gold"} />
+                                <Clock size={12} strokeWidth={1.5} className={unavailable ? "text-rose-500" : "text-gold"} />
                                 <span dir="ltr">{formatTime12(s.start_time)} - {formatTime12(s.end_time)}</span>
                               </div>
                               <div className="flex items-center gap-2">
-                                <span className={`font-heading ${isBooked ? "text-rose-700" : "text-forest"}`}>
-                                  {s.price?.toLocaleString("ar")} <span className="text-xs text-gold">₪</span>
-                                </span>
-                                {isBooked && (
-                                  <span className="text-[10px] bg-rose-200 text-rose-800 px-2 py-0.5 rounded-full font-semibold no-underline">محجوز</span>
+                                {!isBlocked && (
+                                  <span className={`font-heading ${unavailable ? "text-rose-700" : "text-forest"}`}>
+                                    {s.price?.toLocaleString("ar")} <span className="text-xs text-gold">₪</span>
+                                  </span>
+                                )}
+                                {label && (
+                                  <span className="text-[10px] bg-rose-200 text-rose-800 px-2 py-0.5 rounded-full font-semibold no-underline">
+                                    {label}
+                                  </span>
                                 )}
                               </div>
                             </button>
