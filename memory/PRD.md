@@ -47,6 +47,19 @@ Build "Resto" — Arabic-only luxury chalet booking platform with admin/owner/cu
 - ✅ Chalet detail page with image gallery, QR code dialog (downloadable PNG), social share buttons
 - ✅ Premium RTL design — El Messiri / Tajawal fonts, forest+gold palette, glassmorphism header, bento grid
 
+## Iteration 2 (2026-02 — Major Update)
+- ✅ **FIXED**: Booking now fires 3 notifications (customer + owner + ADMIN). Previous version missed admin.
+- ✅ **New booking system**: time-slot based instead of check-in/check-out. Owners define `{date, start_time, end_time, price}` slots; customers pick from available slots.
+- ✅ **OwnerSlotsPage** at `/owner/chalets/:id/slots` to manage slots (add/delete/toggle availability).
+- ✅ **Removed** city/region/address fields. Replaced with single `google_maps_url`. Customer can click "فتح الموقع" to open Google Maps.
+- ✅ **Free-form features** input (no fixed amenity list). Owner adds custom tags like "غرفة بلايستيشن".
+- ✅ **Video upload** alongside images via `MediaUpload` component. 100 MB video limit.
+- ✅ **Chalet approval workflow**: new chalets default to `pending`. Admin must approve before public visibility.
+- ✅ **Admin powers**: approve / reject / suspend / unsuspend / feature / delete chalets. Owner is notified on each status change.
+- ✅ **Homepage simplified**: removed decorative bento and testimonials sections. Now only Hero+Search, Featured, Top Rated, Latest, Owner CTA, Footer.
+- ✅ **Admin dashboard**: Google Maps link replaces city/region column. Pending count badge. Quick-approve from overview tab.
+- ✅ **Race-safe slot booking**: atomic update_one prevents double-booking; returns 409 if slot taken concurrently.
+
 ## Backlog (Future Phases)
 
 ### P1
