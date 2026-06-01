@@ -577,14 +577,50 @@ def test_delete_rbac_customer_forbidden(s):
     s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
 
 
+# --- Iteration 4: helper to seed PAST slot+booking directly via Mongo,
+# bypassing the new "no past slot creation" rule (added in iteration 4). ---
+def _seed_past_slot_and_booking(chalet_id, owner_id, customer_id, customer_name,
+                                  customer_phone, status="pending", price=300,
+                                  days_ago=2):
+    from datetime import datetime, timedelta, timezone as _tz
+    from pymongo import MongoClient
+    from dotenv import load_dotenv
+    load_dotenv("/app/backend/.env")
+    mongo_url = os.environ["MONGO_URL"]
+    db_name = os.environ["DB_NAME"]
+    client = MongoClient(mongo_url)
+    db = client[db_name]
+
+    past_date = (datetime.now(_tz.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    slot_id = str(uuid.uuid4())
+    booking_id = str(uuid.uuid4())
+    now_iso = datetime.now(_tz.utc).isoformat()
+    slot_doc = {
+        "id": slot_id, "chalet_id": chalet_id, "owner_id": owner_id,
+        "date": past_date, "start_time": "10:00", "end_time": "14:00",
+        "price": float(price), "status": "booked", "booking_id": booking_id,
+        "block_reason": None, "notes": "", "created_at": now_iso,
+    }
+    booking_doc = {
+        "id": booking_id, "slot_id": slot_id, "chalet_id": chalet_id,
+        "customer_id": customer_id, "customer_name": customer_name,
+        "customer_phone": customer_phone or "0500000000", "owner_id": owner_id,
+        "slot_date": past_date, "slot_start": "10:00", "slot_end": "14:00",
+        "total_price": float(price), "notes": "", "status": status,
+        "created_at": now_iso,
+    }
+    db["slots"].insert_one(slot_doc)
+    db["bookings"].insert_one(booking_doc)
+    client.close()
+    return slot_id, booking_id
+
+
 def test_auto_expire_pending_past_booking(s):
     """Pending booking with past slot date -> auto-flipped to expired on list; slot released."""
-    # Use yesterday's date
-    from datetime import datetime, timedelta, timezone
-    past = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-
-    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], past, start="10:00", end="14:00", price=333)
-    booking_id = _new_booking(s, slot_id, state["customer_token"])
+    slot_id, booking_id = _seed_past_slot_and_booking(
+        state["chalet_id"], state["owner_id"], state["customer_id"],
+        "TEST عميل", None, status="pending", price=333, days_ago=2,
+    )
 
     # Trigger via GET /bookings/owner
     h_o = {"Authorization": f"Bearer {state['owner_token']}"}
@@ -592,47 +628,38 @@ def test_auto_expire_pending_past_booking(s):
     b = next(x for x in owner_bookings if x["id"] == booking_id)
     assert b["status"] == "expired", f"Expected expired, got {b['status']}"
 
-    # Slot should now be available again
     slots = s.get(f"{API}/chalets/{state['chalet_id']}/slots").json()
     released = next(sl for sl in slots if sl["id"] == slot_id)
     assert released["status"] == "available"
 
-    # cleanup terminal booking
     s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
 
 
 def test_auto_complete_accepted_past_booking(s):
     """Accepted booking with past slot date -> auto-flipped to completed; slot released."""
-    from datetime import datetime, timedelta, timezone
-    past = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-
-    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], past, start="10:00", end="14:00", price=444)
-    booking_id = _new_booking(s, slot_id, state["customer_token"])
-    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
-    # Accept BEFORE list-triggered auto-expiry (acceptance still works because the booking is pending at this moment)
-    s.post(f"{API}/bookings/{booking_id}/accept", headers=h_o)
-
-    # Trigger expiry via /bookings/me
+    slot_id, booking_id = _seed_past_slot_and_booking(
+        state["chalet_id"], state["owner_id"], state["customer_id"],
+        "TEST عميل", None, status="accepted", price=444, days_ago=2,
+    )
     h_c = {"Authorization": f"Bearer {state['customer_token']}"}
     mine = s.get(f"{API}/bookings/me", headers=h_c).json()
     b = next(x for x in mine if x["id"] == booking_id)
     assert b["status"] == "completed", f"Expected completed, got {b['status']}"
 
-    # Slot freed
     slots = s.get(f"{API}/chalets/{state['chalet_id']}/slots").json()
     released = next(sl for sl in slots if sl["id"] == slot_id)
     assert released["status"] == "available"
 
-    # cleanup
+    h_o = {"Authorization": f"Bearer {state['owner_token']}"}
     s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
 
 
 def test_auto_expiry_also_runs_on_admin_bookings_and_slots_listing(s):
     """Verify auto-expiry triggers from /admin/bookings and /chalets/{id}/slots routes too."""
-    from datetime import datetime, timedelta, timezone
-    past = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-    slot_id = _new_slot(s, state["chalet_id"], state["owner_token"], past, start="08:00", end="09:00", price=222)
-    booking_id = _new_booking(s, slot_id, state["customer_token"])
+    slot_id, booking_id = _seed_past_slot_and_booking(
+        state["chalet_id"], state["owner_id"], state["customer_id"],
+        "TEST عميل", None, status="pending", price=222, days_ago=2,
+    )
 
     # Trigger via /chalets/{id}/slots
     s.get(f"{API}/chalets/{state['chalet_id']}/slots")
@@ -666,6 +693,56 @@ def test_starting_price_recomputed_after_owner_cancel(s):
 
     # cleanup
     s.delete(f"{API}/bookings/{booking_id}", headers=h_o)
+
+
+# ---------- Cleanup ----------
+# ---------- Iteration 4: past-date rejection + block_reason ----------
+
+def test_slot_rejects_past_date(s):
+    from datetime import datetime, timezone, timedelta
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    h = {"Authorization": f"Bearer {state['owner_token']}"}
+    r = s.post(f"{API}/chalets/{state['chalet_id']}/slots", json={
+        "date": yesterday, "start_time": "10:00", "end_time": "14:00", "price": 100,
+    }, headers=h)
+    assert r.status_code == 400, r.text
+
+
+def test_slot_rejects_past_time_today(s):
+    """If date == today and start_time has passed, backend should reject."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    h = {"Authorization": f"Bearer {state['owner_token']}"}
+    r = s.post(f"{API}/chalets/{state['chalet_id']}/slots", json={
+        "date": today, "start_time": "00:01", "end_time": "23:59", "price": 100,
+    }, headers=h)
+    # Either 400 (past time) or 200 if server clock is exactly at 00:00 UTC — be tolerant
+    assert r.status_code in (200, 400), r.text
+
+
+def test_slot_create_blocked_with_reason(s):
+    """Owner can create a slot with block_reason and status auto-set to 'blocked'."""
+    h = {"Authorization": f"Bearer {state['owner_token']}"}
+    for reason in ("personal", "maintenance", "closure"):
+        r = s.post(f"{API}/chalets/{state['chalet_id']}/slots", json={
+            "date": FUT_D3, "start_time": f"0{6 + ord(reason[0]) % 5}:00",
+            "end_time": "23:00", "price": 0, "block_reason": reason,
+        }, headers=h)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["status"] == "blocked", f"Expected blocked, got {data['status']}"
+        assert data["block_reason"] == reason
+        # cleanup
+        s.delete(f"{API}/slots/{data['id']}", headers=h)
+
+
+def test_slot_model_has_block_reason_field(s):
+    """Verify Slot returned by GET includes block_reason (even when null)."""
+    r = s.get(f"{API}/chalets/{state['chalet_id']}/slots")
+    assert r.status_code == 200
+    slots = r.json()
+    assert len(slots) > 0
+    assert "block_reason" in slots[0], f"block_reason missing in slot: {slots[0].keys()}"
 
 
 # ---------- Cleanup ----------

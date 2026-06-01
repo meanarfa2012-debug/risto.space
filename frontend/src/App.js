@@ -13,6 +13,7 @@ import OwnerAuth from "./pages/OwnerAuth";
 import OwnerDashboard from "./pages/OwnerDashboard";
 import OwnerChaletForm from "./pages/OwnerChaletForm";
 import OwnerSlotsPage from "./pages/OwnerSlotsPage";
+import SupportPage from "./pages/Support";
 import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
 import MyBookings from "./pages/MyBookings";
@@ -26,6 +27,7 @@ function App() {
           <Toaster position="top-center" richColors closeButton dir="rtl" />
           <Routes>
             <Route path="/" element={<HomePage />} />
+            <Route path="/support" element={<SupportPage />} />
             <Route path="/chalets" element={<ChaletsList />} />
             <Route path="/chalets/:slug" element={<ChaletDetail />} />
             <Route path="/login" element={<RedirectIfAuthed><CustomerLogin /></RedirectIfAuthed>} />

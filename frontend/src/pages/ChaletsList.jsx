@@ -22,14 +22,10 @@ export default function ChaletsList() {
   const [loading, setLoading] = useState(true);
 
   const [q, setQ] = useState(searchParams.get("q") || "");
-  const [capacity, setCapacity] = useState(searchParams.get("capacity") || "");
-  const [rooms, setRooms] = useState(searchParams.get("rooms") || "");
   const [price, setPrice] = useState([
     Number(searchParams.get("min_price") || 0),
     Number(searchParams.get("max_price") || 2000),
   ]);
-  const [minRating, setMinRating] = useState(searchParams.get("min_rating") || "");
-  const [date, setDate] = useState(searchParams.get("date") || "");
   const [sort, setSort] = useState(searchParams.get("sort") || "newest");
   const featured = searchParams.get("featured") === "true";
 
@@ -37,12 +33,8 @@ export default function ChaletsList() {
     setLoading(true);
     const params = {};
     if (q) params.q = q;
-    if (capacity) params.capacity = Number(capacity);
-    if (rooms) params.rooms = Number(rooms);
     if (price[0] > 0) params.min_price = price[0];
     if (price[1] < 2000) params.max_price = price[1];
-    if (minRating) params.min_rating = Number(minRating);
-    if (date) params.date = date;
     if (sort) params.sort = sort;
     if (featured) params.featured = true;
 
@@ -62,21 +54,15 @@ export default function ChaletsList() {
   const applyFilters = () => {
     const next = {};
     if (q) next.q = q;
-    if (capacity) next.capacity = capacity;
-    if (rooms) next.rooms = rooms;
     if (price[0] > 0) next.min_price = price[0];
     if (price[1] < 2000) next.max_price = price[1];
-    if (minRating) next.min_rating = minRating;
-    if (date) next.date = date;
     if (sort) next.sort = sort;
     if (featured) next.featured = "true";
     setSearchParams(next);
   };
 
   const reset = () => {
-    setQ(""); setCapacity(""); setRooms("");
-    setPrice([0, 2000]); setMinRating(""); setDate("");
-    setSort("newest");
+    setQ(""); setPrice([0, 2000]); setSort("newest");
     setSearchParams({});
   };
 
@@ -117,41 +103,19 @@ export default function ChaletsList() {
             </div>
 
             <div className="space-y-2">
-              <Label className="text-xs text-inkSoft">بحث</Label>
+              <Label className="text-xs text-inkSoft">اسم الشاليه</Label>
               <Input
                 data-testid="filter-q"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="اسم الشاليه..."
+                placeholder="ابحث باسم الشاليه..."
                 className="bg-bone border-forest/10"
               />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs text-inkSoft">التاريخ</Label>
-              <Input
-                data-testid="filter-date"
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="bg-bone border-forest/10"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label className="text-xs text-inkSoft">الغرف</Label>
-                <Input data-testid="filter-rooms" type="number" min="0" value={rooms} onChange={(e) => setRooms(e.target.value)} placeholder="2+" className="bg-bone border-forest/10" />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-inkSoft">الضيوف</Label>
-                <Input data-testid="filter-capacity" type="number" min="0" value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="4+" className="bg-bone border-forest/10" />
-              </div>
             </div>
 
             <div className="space-y-3">
               <Label className="text-xs text-inkSoft flex justify-between">
-                <span>السعر (₪)</span>
+                <span>نطاق السعر (₪)</span>
                 <span className="text-forest">{price[0]} - {price[1]}</span>
               </Label>
               <Slider
@@ -161,21 +125,7 @@ export default function ChaletsList() {
                 min={0} max={2000} step={50}
                 dir="rtl"
               />
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-xs text-inkSoft">أدنى تقييم</Label>
-              <Select value={minRating || "any"} onValueChange={(v) => setMinRating(v === "any" ? "" : v)}>
-                <SelectTrigger data-testid="filter-rating" className="bg-bone border-forest/10">
-                  <SelectValue placeholder="أي تقييم" />
-                </SelectTrigger>
-                <SelectContent dir="rtl">
-                  <SelectItem value="any">أي تقييم</SelectItem>
-                  <SelectItem value="3">3 نجوم فأكثر</SelectItem>
-                  <SelectItem value="4">4 نجوم فأكثر</SelectItem>
-                  <SelectItem value="4.5">4.5 فأكثر</SelectItem>
-                </SelectContent>
-              </Select>
+              <p className="text-[10px] text-inkSoft">اختياري</p>
             </div>
 
             <div className="flex gap-2 pt-2">
@@ -186,6 +136,10 @@ export default function ChaletsList() {
               <Button onClick={reset} variant="outline" data-testid="reset-filters">
                 مسح
               </Button>
+            </div>
+
+            <div className="text-[11px] text-inkSoft text-center pt-2 border-t border-border/40">
+              أو تصفّح كل الشاليهات دون تصفية
             </div>
           </aside>
 
@@ -205,7 +159,7 @@ export default function ChaletsList() {
             ) : chalets.length === 0 ? (
               <div className="text-center py-24 bg-card rounded-2xl border border-border/40">
                 <div className="font-heading text-2xl text-forest mb-2">لا توجد نتائج</div>
-                <p className="text-inkSoft">جرّب تعديل معايير البحث</p>
+                <p className="text-inkSoft">جرّب تعديل معايير البحث أو امسح التصفية</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8" data-testid="chalets-grid">

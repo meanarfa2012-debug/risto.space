@@ -106,8 +106,9 @@ class Slot(BaseModel):
     start_time: str  # HH:MM
     end_time: str    # HH:MM
     price: float
-    status: str = "available"  # available | booked | unavailable
+    status: str = "available"  # available | booked | unavailable | blocked
     booking_id: Optional[str] = None
+    block_reason: Optional[str] = None  # personal | maintenance | closure | null
     notes: Optional[str] = ""
     created_at: str = Field(default_factory=utc_now_iso)
 
@@ -116,8 +117,9 @@ class SlotCreate(BaseModel):
     date: str
     start_time: str
     end_time: str
-    price: float
+    price: float = 0.0
     notes: Optional[str] = ""
+    block_reason: Optional[str] = None  # if set, slot is created as 'blocked'
 
 
 class SlotUpdate(BaseModel):

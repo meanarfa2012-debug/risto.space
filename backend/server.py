@@ -441,7 +441,27 @@ async def create_slot(chalet_id: str, payload: SlotCreate, user: dict = Depends(
         raise HTTPException(status_code=404, detail="الشاليه غير موجود")
     if chalet["owner_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
-    slot = Slot(chalet_id=chalet_id, owner_id=user["id"], **payload.model_dump())
+
+    # Validate that slot is not in the past
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    today = now.strftime("%Y-%m-%d")
+    hhmm_now = now.strftime("%H:%M")
+    if payload.date < today:
+        raise HTTPException(status_code=400, detail="لا يمكن إنشاء موعد في الماضي")
+    if payload.date == today and payload.start_time <= hhmm_now:
+        raise HTTPException(status_code=400, detail="لا يمكن إنشاء موعد في وقت قد مضى")
+    if payload.start_time >= payload.end_time:
+        raise HTTPException(status_code=400, detail="وقت الانتهاء يجب أن يكون بعد البداية")
+
+    data = payload.model_dump()
+    initial_status = "blocked" if data.get("block_reason") else "available"
+    slot = Slot(
+        chalet_id=chalet_id,
+        owner_id=user["id"],
+        status=initial_status,
+        **data,
+    )
     await slots_col.insert_one(slot.model_dump())
     await _update_starting_price(chalet_id)
     return slot.model_dump()

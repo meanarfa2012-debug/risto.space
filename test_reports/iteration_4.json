@@ -1,0 +1,30 @@
+{
+  "summary": "Iteration 4 testing complete. Backend pytest: 52/52 pass (100%) — 48 legacy + 4 new tests for past-date rejection + block_reason. Three auto-expiry tests that previously created past slots via the API had to be rewritten to seed past slots/bookings directly via pymongo because the new past-slot validation correctly rejects them. Frontend Playwright on REACT_APP_BACKEND_URL verified all iteration-4 UI features: /support page with phone 0566397331, footer phone, browse-all-btn, ChaletsList simplified filters (no rooms/capacity/rating/date forbidden testids found), mobile hamburger menu with all required items (guest + owner variants), mobile nav to /support works, ChaletDetail mobile uses 'order-1 lg:order-2' + mobile-title-block + 12h time format + rose styling for booked slots, OwnerSlotsPage shows booking/block tabs and block-reason selector with date min=today, blocked slots correctly persisted with status='blocked' and block_reason='maintenance'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now ~965 lines — strongly recommend splitting into routers per resource (chalets.py, slots.py, bookings.py, admin.py, auth.py) before next iteration. This was already flagged in iteration 3 and remains unaddressed.",
+    "create_slot validates past date/time correctly but uses naive lexicographic string comparison (payload.date < today, payload.start_time <= hhmm_now). Works because YYYY-MM-DD and HH:MM strings sort correctly — fine, but a comment explaining the assumption would help.",
+    "SlotCreate.price defaults to 0.0 and create_slot does not enforce price > 0 when block_reason is None. An owner could create a bookable slot with price=0 by mistake. Recommend rejecting price <= 0 unless block_reason is set (the problem statement explicitly says 'price=0 allowed when block_reason is set; otherwise price is required > 0').",
+    "_expire_past_bookings still runs on every list call as flagged in iteration 3 — acceptable for MVP but should be moved to APScheduler / cron before production scale-up.",
+    "Booking model status field comment still says '# pending | accepted | rejected | cancelled' — missing 'completed' and 'expired'. Cosmetic/documentation only, but worth fixing.",
+    "Slot bulk-create endpoint does NOT validate past dates (only create_slot does). If owners use the bulk endpoint they can still insert past slots. Mirror the past-date validation into create_slots_bulk."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (52/52)", "frontend": "100% (all iteration-4 features verified)"},
+  "test_credentials": "Admin meanarfa2012@gmail.com / maen1029384756; QA Owner qatestowner@resto.test / Owner12345 (created during testing — has one chalet 'QA Chalet'); customer phone-only.",
+  "seed_data_creation": "pytest run creates one TEST_owner_<runid>@resto.test owner + one chalet + many slots/bookings — cleaned up in test_zz_cleanup. Past-date seeding now uses pymongo directly to insert past slot+booking records, with self-cleanup via DELETE /api/bookings/{id} after each test. Playwright run created qatestowner@resto.test owner + 'QA Chalet' (chalet_id 3fbae7d6-bb5f-48aa-8b60-f7a7ef49b76f) — these persist for re-use.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression at /app/backend/tests/backend_test.py — 52 tests. Run: cd /app && python -m pytest backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml. IMPORTANT: past-date slot creation via /api/chalets/{id}/slots is now blocked (400). To seed past bookings for auto-expiry tests, use _seed_past_slot_and_booking() which inserts directly via pymongo using MONGO_URL+DB_NAME from /app/backend/.env. New testids: support-call-link, support-call-btn, footer-support-phone, mobile-menu-btn, mobile-nav-home/chalets/featured/support/owner/admin, mobile-logout-btn, browse-all-btn, mode-booking, mode-block, block-reason, mobile-title-block. block_reason values are 'personal' | 'maintenance' | 'closure'. SlotCreate.block_reason set => slot.status='blocked'. Server clock observed at 2026-06-01 during this run.",
+  "rca of the issue": "No active bugs. Iteration 4 added: (a) backend past-date/time validation in create_slot, (b) Slot.block_reason field + SlotCreate.block_reason that auto-sets status='blocked', (c) frontend Support page, footer phone, mobile Sheet drawer, OwnerSlotsPage booking/block tabs, ChaletDetail mobile order flip, 12h time formatting, rose styling for booked slots, simplified ChaletsList and Home filters, OwnerDashboard tri-revenue (upcoming/actual/total). All verified end-to-end. The three iteration-3 auto-expiry tests had to be migrated from API-based seeding to direct-Mongo seeding because the new past-date validation made their original approach unreachable — this is a correct consequence of the new feature, not a regression."
+}

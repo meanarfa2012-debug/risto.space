@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Search, BedDouble, Users, Calendar, ArrowLeft, Star } from "lucide-react";
+import { Search, ArrowLeft, Star } from "lucide-react";
 import api from "../lib/api";
 import Layout from "../components/Layout";
 import ChaletCard from "../components/ChaletCard";
@@ -12,8 +12,6 @@ const HERO_IMG =
 export default function HomePage() {
   const [data, setData] = useState({ featured: [], new: [], top_rated: [] });
   const [q, setQ] = useState("");
-  const [date, setDate] = useState("");
-  const [guests, setGuests] = useState("");
   const nav = useNavigate();
 
   useEffect(() => {
@@ -24,8 +22,6 @@ export default function HomePage() {
     e?.preventDefault?.();
     const params = new URLSearchParams();
     if (q) params.set("q", q);
-    if (date) params.set("date", date);
-    if (guests) params.set("capacity", guests);
     nav(`/chalets?${params.toString()}`);
   };
 
@@ -55,47 +51,34 @@ export default function HomePage() {
             <form
               onSubmit={goSearch}
               data-testid="hero-search-form"
-              className="bg-bone/95 backdrop-blur-xl rounded-2xl p-2 grid grid-cols-1 sm:grid-cols-12 gap-2 max-w-3xl"
+              className="bg-bone/95 backdrop-blur-xl rounded-2xl p-2 grid grid-cols-1 sm:grid-cols-12 gap-2 max-w-2xl"
             >
-              <div className="sm:col-span-5 flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-forest/5 transition">
+              <div className="sm:col-span-9 flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-forest/5 transition">
                 <Search size={18} strokeWidth={1.5} className="text-gold shrink-0" />
                 <input
                   data-testid="search-input"
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="ابحث باسم الشاليه..."
-                  className="bg-transparent outline-none w-full text-sm placeholder:text-inkSoft text-ink"
-                />
-              </div>
-              <div className="sm:col-span-3 flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-forest/5 transition border-r border-border/50">
-                <Calendar size={18} strokeWidth={1.5} className="text-gold shrink-0" />
-                <input
-                  data-testid="search-date"
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="bg-transparent outline-none w-full text-sm placeholder:text-inkSoft text-ink"
-                />
-              </div>
-              <div className="sm:col-span-2 flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-forest/5 transition border-r border-border/50">
-                <Users size={18} strokeWidth={1.5} className="text-gold shrink-0" />
-                <input
-                  data-testid="search-guests"
-                  type="number" min="1"
-                  value={guests}
-                  onChange={(e) => setGuests(e.target.value)}
-                  placeholder="الضيوف"
+                  placeholder="ابحث باسم الشاليه أو ابدأ التصفح..."
                   className="bg-transparent outline-none w-full text-sm placeholder:text-inkSoft text-ink"
                 />
               </div>
               <Button
                 type="submit"
                 data-testid="hero-search-submit"
-                className="sm:col-span-2 h-auto bg-forest text-bone hover:bg-forest-dark rounded-xl px-6 py-3 text-base"
+                className="sm:col-span-3 h-auto bg-forest text-bone hover:bg-forest-dark rounded-xl px-6 py-3 text-base"
               >
                 بحث
               </Button>
             </form>
+            <button
+              type="button"
+              onClick={() => nav("/chalets")}
+              data-testid="browse-all-btn"
+              className="mt-4 text-sm text-bone/80 hover:text-gold transition underline-offset-4 hover:underline"
+            >
+              أو تصفّح جميع الشاليهات
+            </button>
           </div>
         </div>
       </section>

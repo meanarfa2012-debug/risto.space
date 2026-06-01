@@ -6,6 +6,7 @@ import api from "../lib/api";
 import { useEffect, useState } from "react";
 import Layout from "../components/Layout";
 import { Button } from "../components/ui/button";
+import { formatTime12 } from "../lib/format";
 
 const STATUS = {
   pending: { label: "بانتظار الموافقة", color: "bg-gold/15 text-gold" },
@@ -83,7 +84,7 @@ export default function MyBookings() {
                       </div>
                       <div className="flex items-center gap-1.5 text-xs text-inkSoft" dir="ltr">
                         <Clock size={12} strokeWidth={1.5} />
-                        {b.slot_start} - {b.slot_end}
+                        {formatTime12(b.slot_start)} - {formatTime12(b.slot_end)}
                       </div>
                     </div>
                     <div className="md:col-span-2">

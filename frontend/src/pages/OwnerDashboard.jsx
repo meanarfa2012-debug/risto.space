@@ -16,6 +16,7 @@ import {
 } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import StarRating from "../components/StarRating";
+import { formatTime12 } from "../lib/format";
 
 const CHALET_STATUS_BADGE = {
   pending: { label: "بانتظار المراجعة", color: "bg-gold/15 text-gold" },
@@ -82,8 +83,12 @@ export default function OwnerDashboard() {
     bookings: bookings.length,
     pendingBookings: bookings.filter((b) => b.status === "pending").length,
     accepted: bookings.filter((b) => b.status === "accepted").length,
-    revenue: bookings.filter((b) => b.status === "accepted").reduce((s, b) => s + (b.total_price || 0), 0),
+    // Upcoming revenue: bookings accepted by owner, not yet completed
+    upcomingRevenue: bookings.filter((b) => b.status === "accepted").reduce((s, b) => s + (b.total_price || 0), 0),
+    // Actual revenue: bookings that have been completed (slot time finished)
+    actualRevenue: bookings.filter((b) => b.status === "completed").reduce((s, b) => s + (b.total_price || 0), 0),
   };
+  stats.totalRevenue = stats.upcomingRevenue + stats.actualRevenue;
 
   return (
     <Layout>
@@ -104,10 +109,10 @@ export default function OwnerDashboard() {
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-4 mb-10">
           <StatCard label="الشاليهات" value={stats.chalets} icon={<BedDouble size={18} />} />
           <StatCard label="بانتظار الاعتماد" value={stats.pending} icon={<Sparkles size={18} />} highlight={stats.pending > 0} />
-          <StatCard label="إجمالي الحجوزات" value={stats.bookings} icon={<CalIcon size={18} />} />
           <StatCard label="حجوزات معلّقة" value={stats.pendingBookings} icon={<Star size={18} />} highlight={stats.pendingBookings > 0} />
-          <StatCard label="مقبولة" value={stats.accepted} icon={<Check size={18} />} />
-          <StatCard label="الإيرادات (₪)" value={stats.revenue.toLocaleString("ar")} icon={<Star size={18} />} dark />
+          <StatCard label="إيرادات قادمة (₪)" value={stats.upcomingRevenue.toLocaleString("ar")} icon={<Star size={18} />} />
+          <StatCard label="إيرادات فعلية (₪)" value={stats.actualRevenue.toLocaleString("ar")} icon={<Check size={18} />} />
+          <StatCard label="إجمالي الإيرادات (₪)" value={stats.totalRevenue.toLocaleString("ar")} icon={<Star size={18} />} dark />
         </div>
 
         <Tabs value={tab} onValueChange={setTab}>
@@ -209,7 +214,7 @@ export default function OwnerDashboard() {
                       <TableCell>{b.chalet_name}</TableCell>
                       <TableCell className="text-xs">
                         <div>{b.slot_date}</div>
-                        <div className="text-inkSoft" dir="ltr">{b.slot_start} - {b.slot_end}</div>
+                        <div className="text-inkSoft" dir="ltr">{formatTime12(b.slot_start)} - {formatTime12(b.slot_end)}</div>
                       </TableCell>
                       <TableCell>{b.total_price?.toLocaleString("ar")} ₪</TableCell>
                       <TableCell><BookingBadge status={b.status} /></TableCell>

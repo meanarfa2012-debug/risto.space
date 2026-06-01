@@ -29,6 +29,7 @@ import {
 } from "../components/ui/table";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
+import { formatTime12 } from "../lib/format";
 
 const CHALET_STATUS = {
   pending: { label: "بانتظار المراجعة", color: "bg-gold/15 text-gold" },
@@ -326,7 +327,7 @@ export default function AdminDashboard() {
                       </TableCell>
                       <TableCell className="text-xs">
                         <div>{b.slot_date}</div>
-                        <div className="text-inkSoft" dir="ltr">{b.slot_start} - {b.slot_end}</div>
+                        <div className="text-inkSoft" dir="ltr">{formatTime12(b.slot_start)} - {formatTime12(b.slot_end)}</div>
                       </TableCell>
                       <TableCell>{b.total_price?.toLocaleString("ar")} ₪</TableCell>
                       <TableCell><Badge variant="outline">{b.status}</Badge></TableCell>

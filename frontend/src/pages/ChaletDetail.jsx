@@ -21,6 +21,7 @@ import api, { fileUrl } from "../lib/api";
 import Layout from "../components/Layout";
 import StarRating from "../components/StarRating";
 import ShareButtons from "../components/ShareButtons";
+import { formatTime12 } from "../lib/format";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { Label } from "../components/ui/label";
@@ -155,8 +156,8 @@ export default function ChaletDetail() {
     ? (images[activeMedia.idx] ? fileUrl(images[activeMedia.idx]) : "https://images.unsplash.com/photo-1673469110171-dbf5d19a8336?w=2000")
     : null;
 
-  // Group slots by date, only available + booked (hide unavailable from public)
-  const visibleSlots = slots.filter((s) => s.status !== "unavailable");
+  // Group slots by date, hide unavailable + blocked from public booking UI
+  const visibleSlots = slots.filter((s) => s.status === "available" || s.status === "booked");
   const groupedSlots = visibleSlots.reduce((acc, s) => {
     (acc[s.date] ||= []).push(s);
     return acc;
@@ -220,11 +221,39 @@ export default function ChaletDetail() {
         )}
       </section>
 
-      {/* Main content */}
+      {/* Mobile-only: chalet title + summary BEFORE booking panel */}
+      <section className="container-wide pb-4 lg:hidden" data-testid="mobile-title-block">
+        {chalet.featured && (
+          <div className="inline-flex items-center gap-1.5 bg-gold/15 text-gold text-xs font-semibold px-3 py-1.5 rounded-full mb-3">
+            <Sparkles size={12} strokeWidth={2} /> شاليه مميز
+          </div>
+        )}
+        <h1 className="font-heading text-3xl sm:text-4xl text-forest leading-tight">
+          {chalet.name}
+        </h1>
+        <div className="flex items-center flex-wrap gap-3 mt-3 text-inkSoft text-sm">
+          <StarRating value={chalet.avg_rating || 0} size={14} testIdPrefix="mobile-rating" />
+          <span>{chalet.avg_rating?.toFixed?.(1) || "—"} ({chalet.reviews_count || 0})</span>
+          {chalet.google_maps_url && (
+            <a
+              href={chalet.google_maps_url}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="mobile-open-location"
+              className="inline-flex items-center gap-1.5 text-gold font-medium"
+            >
+              <MapPin size={14} strokeWidth={1.5} /> فتح الموقع
+            </a>
+          )}
+        </div>
+        <p className="text-sm text-ink mt-3 leading-loose line-clamp-3">{chalet.description}</p>
+      </section>
+
+      {/* Main content - mobile reorder: booking sidebar appears HIGH on mobile */}
       <section className="container-wide pb-24">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
-          <div className="lg:col-span-8 space-y-10">
-            <div>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12">
+          <div className="lg:col-span-8 space-y-10 order-2 lg:order-1">
+            <div className="hidden lg:block">
               {chalet.featured && (
                 <div className="inline-flex items-center gap-1.5 bg-gold/15 text-gold text-xs font-semibold px-3 py-1.5 rounded-full mb-4">
                   <Sparkles size={12} strokeWidth={2} /> شاليه مميز
@@ -262,7 +291,7 @@ export default function ChaletDetail() {
               </div>
             </div>
 
-            <div className="section-divider" />
+            <div className="hidden lg:block section-divider" />
 
             <div className="grid grid-cols-3 gap-6">
               <StatBlock icon={<BedDouble size={20} strokeWidth={1.5} />} label="الغرف" value={chalet.rooms} />
@@ -379,8 +408,8 @@ export default function ChaletDetail() {
           </div>
 
           {/* Slots sidebar */}
-          <aside className="lg:col-span-4">
-            <div className="sticky top-28 bg-card border border-border/40 rounded-2xl p-6 luxury-shadow space-y-4" data-testid="slots-sidebar">
+          <aside className="order-1 lg:order-2 lg:col-span-4">
+            <div className="lg:sticky lg:top-28 bg-card border border-border/40 rounded-2xl p-6 luxury-shadow space-y-4" data-testid="slots-sidebar">
               <div>
                 <div className="font-heading text-xl text-forest">المواعيد المتاحة</div>
                 <p className="text-xs text-inkSoft mt-1">اختر موعداً لإرسال طلب الحجز</p>
@@ -411,20 +440,20 @@ export default function ChaletDetail() {
                               onClick={() => !isBooked && setSelectedSlot(s)}
                               className={`w-full text-right p-3 rounded-lg border transition flex items-center justify-between ${
                                 isBooked
-                                  ? "bg-muted text-inkSoft border-border/40 cursor-not-allowed"
+                                  ? "bg-rose-50 border-rose-200 text-rose-700 cursor-not-allowed line-through opacity-80"
                                   : "bg-bone border-forest/10 hover:border-gold hover:bg-gold/5"
                               }`}
                             >
                               <div className="flex items-center gap-2 text-sm">
-                                <Clock size={12} strokeWidth={1.5} className="text-gold" />
-                                <span dir="ltr">{s.start_time} - {s.end_time}</span>
+                                <Clock size={12} strokeWidth={1.5} className={isBooked ? "text-rose-500" : "text-gold"} />
+                                <span dir="ltr">{formatTime12(s.start_time)} - {formatTime12(s.end_time)}</span>
                               </div>
                               <div className="flex items-center gap-2">
-                                <span className="font-heading text-forest">
+                                <span className={`font-heading ${isBooked ? "text-rose-700" : "text-forest"}`}>
                                   {s.price?.toLocaleString("ar")} <span className="text-xs text-gold">₪</span>
                                 </span>
                                 {isBooked && (
-                                  <span className="text-[10px] bg-gold/15 text-gold px-2 py-0.5 rounded-full">محجوز</span>
+                                  <span className="text-[10px] bg-rose-200 text-rose-800 px-2 py-0.5 rounded-full font-semibold no-underline">محجوز</span>
                                 )}
                               </div>
                             </button>
@@ -459,7 +488,7 @@ export default function ChaletDetail() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-inkSoft">الوقت</span>
-                  <span className="font-medium" dir="ltr">{selectedSlot.start_time} - {selectedSlot.end_time}</span>
+                  <span className="font-medium" dir="ltr">{formatTime12(selectedSlot.start_time)} - {formatTime12(selectedSlot.end_time)}</span>
                 </div>
                 <div className="flex justify-between pt-2 border-t border-border/40 font-heading text-lg text-forest">
                   <span>الإجمالي</span>
