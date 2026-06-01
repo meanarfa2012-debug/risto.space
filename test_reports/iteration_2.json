@@ -1,0 +1,34 @@
+{
+  "summary": "Iteration 2 testing. Backend pytest suite rewritten for new slot-based schema and run against public REACT_APP_BACKEND_URL: 37/37 tests passed (100%). Verified the critical user-reported fix: admin DOES now receive an in-app notification on every new booking (push_admin_notification called inside POST /api/bookings). Verified: chalets are created with status='pending' and hidden from public /api/chalets until admin approves; admin approve/reject/suspend triggers owner notification; slots CRUD with starting_price recompute; slot locking (booked) prevents edit/delete and returns 409 on double-book; slot release on reject/cancel; date+price filtering through slots; admin delete cascades slots; RBAC enforced (customer cannot create slot/chalet, owner cannot approve); upload accepts images, rejects unsupported ext; admin notifications fire on owner registration, chalet registration, new booking, review report. Frontend: Homepage is correctly simplified (Hero+Search, Featured/TopRated/Latest sections, Owner CTA, Footer) with NO 'Wake up to stunning views' / bento decorative sections. Owner registration → dashboard redirect works. Chalet form has no city/address/price_per_night fields and correctly exposes name/phone/google_maps_url/description/rooms/capacity/features (tag input). Admin login + chalet tab render correctly. Customer phone login auto-registers. All data-testid attributes present and used. One UX note: OwnerChaletForm requires at least 1 image upload (toast 'أضف صورة واحدة على الأقل') — backend does NOT require this, so it is a frontend-only validation; if intentional, ok, otherwise consider making images optional or making it clearer in the UI.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ChaletsList filters", "issues": ["Still uses native HTML5 date input (mm/dd/yyyy) instead of shadcn Calendar — same as iteration 1 note. Cosmetic only."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "(Optional) Decide whether to keep the 'at least one image required' client-side validation in OwnerChaletForm; backend allows zero images. If keeping it, make the requirement visible to the user before submit (currently only surfaces as a toast)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~830 lines; consider splitting into routers per resource (auth/chalets/slots/bookings/reviews/admin) as it grows.",
+    "Slot locking uses an atomic update_one with status='available' filter — correct pattern, prevents race conditions, returns 409 as required.",
+    "push_admin_notification iterates all admins via async for users_col.find — works but blocks on each insert; fine at small admin counts.",
+    "/api/chalets list does post-filter in Python for date/min_price/max_price (fetch chalets first, then intersect with slots). Could be reversed (slots first) for better selectivity once data grows; acceptable for MVP.",
+    "starting_price recomputes only on slot CRUD and booking reject/cancel — correct. On accept it stays booked (no recompute needed). ✓",
+    "Admin status enum is duplicated as string list both in route and notification dicts; consider extracting to a constant/enum.",
+    "Frontend OwnerChaletForm enforces images >=1 client-side though backend doesn't — minor mismatch.",
+    "All endpoints exclude Mongo _id via projection; no ObjectId leakage observed.",
+    "data-testid attributes present on all interactive elements across new pages (OwnerSlotsPage, OwnerChaletForm, MediaUpload, FeaturesInput, AdminDashboard, ChaletDetail)."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (37/37)", "frontend": "Critical paths verified; full UI booking E2E blocked by 'image required' client check (worked around via API tests)"},
+  "test_credentials": "Admin meanarfa2012@gmail.com / maen1029384756; customer phone-only auto-register; owners register via /owner/register (test file generates per-run TEST_ emails).",
+  "seed_data_creation": "Each pytest run creates a TEST_owner_<runid>@resto.test owner, one approved chalet, two slots, one customer (phone 05000xxxxx), one booking, one review. test_zz_cleanup deletes the chalet via admin endpoint (cascades slots). A few extra owners/chalets from UI exploration may remain (small footprint).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression suite at /app/backend/tests/backend_test.py runs with: cd /app && python -m pytest backend/tests/backend_test.py -v --junitxml=/app/test_reports/pytest/pytest_results.xml — all 37 tests pass. Test file reads REACT_APP_BACKEND_URL from /app/frontend/.env as fallback. Key new testids: owner-tab-register, owner-tab-login, owner-submit; form-name, form-phone, form-maps-url, form-description, form-rooms, form-capacity, form-submit; feature-input, add-feature-btn, feature-tag-{i}, remove-feature-{i}; add-slot-form, slot-date, slot-start, slot-end, slot-price, slot-notes, add-slot-btn, slots-list, slot-row-{id}, toggle-slot-{id}, delete-slot-{id}; admin-tab-overview/chalets/users/bookings/reviews, admin-chalet-{id}, admin-map-{id}, approve-{id}, suspend-{id}, unsuspend-{id}, quick-approve-{id}, feature-{id}, admin-delete-{id}; chalet-detail, slots-sidebar, slot-{id}, open-location-link, booking-notes, booking-submit-btn. OwnerChaletForm requires images >=1 client-side; to test full UI booking flow, either upload an image via the MediaUpload component (input[type=file]) or use API.",
+  "rca of the issue": "Original user complaint 'no notification appears for chalet owner OR admin on booking' — RCA: previous server.py only called push_notification for customer and owner. Fix: added push_admin_notification call inside create_booking (lines 549-554 in current server.py) and changed booking input to slot-based. Verified end-to-end: test_create_booking_with_slot_and_three_notifications captures notifications before+after for owner and admin and asserts a 'new_booking' notification appears for both. All three notifications (customer/owner/admin) fire reliably."
+}

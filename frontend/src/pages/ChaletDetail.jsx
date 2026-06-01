@@ -1,15 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
-  MapPin,
   Users,
   BedDouble,
   Sparkles,
   Calendar,
-  Check,
+  Clock,
+  MapPin,
   QrCode,
   Download,
   Flag,
+  Phone,
+  ExternalLink,
+  Film,
+  Check,
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import { toast } from "sonner";
@@ -18,15 +22,15 @@ import Layout from "../components/Layout";
 import StarRating from "../components/StarRating";
 import ShareButtons from "../components/ShareButtons";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
+import { Label } from "../components/ui/label";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from "../components/ui/dialog";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -36,43 +40,44 @@ export default function ChaletDetail() {
   const { user } = useAuth();
   const [chalet, setChalet] = useState(null);
   const [reviews, setReviews] = useState([]);
-  const [active, setActive] = useState(0);
+  const [slots, setSlots] = useState([]);
+  const [activeMedia, setActiveMedia] = useState({ kind: "image", idx: 0 });
   const [showQR, setShowQR] = useState(false);
 
-  // booking form
-  const [checkIn, setCheckIn] = useState("");
-  const [checkOut, setCheckOut] = useState("");
-  const [guests, setGuests] = useState(2);
-  const [notes, setNotes] = useState("");
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [bookingNotes, setBookingNotes] = useState("");
   const [bookingLoading, setBookingLoading] = useState(false);
 
-  // review form
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState("");
 
+  const loadChalet = async () => {
+    const r = await api.get(`/chalets/by-slug/${slug}`);
+    setChalet(r.data);
+    const [rev, sl] = await Promise.all([
+      api.get(`/reviews/chalet/${r.data.id}`),
+      api.get(`/chalets/${r.data.id}/slots`),
+    ]);
+    setReviews(rev.data);
+    setSlots(sl.data);
+  };
+
   useEffect(() => {
-    api.get(`/chalets/by-slug/${slug}`).then((r) => {
-      setChalet(r.data);
-      api.get(`/reviews/chalet/${r.data.id}`).then((rev) => setReviews(rev.data));
-    }).catch(() => {});
+    loadChalet().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
   if (!chalet) {
     return (
       <Layout>
-        <div className="container-wide py-24 text-center text-inkSoft">جاري تحميل الشاليه...</div>
+        <div className="container-wide py-24 text-center text-inkSoft">جاري التحميل...</div>
       </Layout>
     );
   }
 
-  const nights = checkIn && checkOut
-    ? Math.max(0, Math.ceil((new Date(checkOut) - new Date(checkIn)) / 86400000))
-    : 0;
-  const total = nights * chalet.price_per_night;
   const publicUrl = `${window.location.origin}/chalets/${chalet.slug}`;
 
-  const submitBooking = async (e) => {
-    e.preventDefault();
+  const submitBooking = async () => {
     if (!user) {
       nav("/login?redirect=" + encodeURIComponent(`/chalets/${slug}`));
       return;
@@ -81,18 +86,12 @@ export default function ChaletDetail() {
       toast.error("الحجز متاح للعملاء فقط");
       return;
     }
-    if (nights < 1) {
-      toast.error("يرجى تحديد التواريخ");
-      return;
-    }
+    if (!selectedSlot) return;
     setBookingLoading(true);
     try {
       await api.post("/bookings", {
-        chalet_id: chalet.id,
-        check_in: checkIn,
-        check_out: checkOut,
-        guests: Number(guests),
-        notes,
+        slot_id: selectedSlot.id,
+        notes: bookingNotes,
       });
       toast.success("تم إرسال طلب الحجز");
       nav("/my-bookings");
@@ -110,17 +109,10 @@ export default function ChaletDetail() {
       return;
     }
     try {
-      await api.post("/reviews", {
-        chalet_id: chalet.id,
-        rating,
-        comment,
-      });
+      await api.post("/reviews", { chalet_id: chalet.id, rating, comment });
       toast.success("شكراً لتقييمك");
       setComment("");
-      const r = await api.get(`/reviews/chalet/${chalet.id}`);
-      setReviews(r.data);
-      const c = await api.get(`/chalets/by-slug/${slug}`);
-      setChalet(c.data);
+      loadChalet();
     } catch (err) {
       toast.error(err?.response?.data?.detail || "تعذر إضافة التقييم");
     }
@@ -129,7 +121,8 @@ export default function ChaletDetail() {
   const reportReview = async (id) => {
     try {
       await api.post(`/reviews/${id}/report`);
-      toast.success("تم الإبلاغ، سيُراجع الفريق التقييم");
+      toast.success("تم الإبلاغ");
+      loadChalet();
     } catch {
       toast.error("تعذر الإبلاغ");
     }
@@ -156,59 +149,81 @@ export default function ChaletDetail() {
     img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(data)));
   };
 
-  const images = chalet.images?.length ? chalet.images : [];
-  const heroImg = images[active]
-    ? fileUrl(images[active])
-    : "https://images.unsplash.com/photo-1673469110171-dbf5d19a8336?crop=entropy&cs=srgb&fm=jpg&w=2000&q=85";
+  const images = chalet.images || [];
+  const videos = chalet.videos || [];
+  const heroSrc = activeMedia.kind === "image"
+    ? (images[activeMedia.idx] ? fileUrl(images[activeMedia.idx]) : "https://images.unsplash.com/photo-1673469110171-dbf5d19a8336?w=2000")
+    : null;
+
+  // Group slots by date, only available + booked (hide unavailable from public)
+  const visibleSlots = slots.filter((s) => s.status !== "unavailable");
+  const groupedSlots = visibleSlots.reduce((acc, s) => {
+    (acc[s.date] ||= []).push(s);
+    return acc;
+  }, {});
 
   return (
     <Layout>
-      {/* Image gallery */}
+      {/* Media gallery */}
       <section className="container-wide pt-8 pb-12" data-testid="chalet-detail">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 max-h-[560px]">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           <div className="lg:col-span-8 aspect-[16/10] rounded-2xl overflow-hidden bg-muted">
-            <img src={heroImg} alt={chalet.name} className="w-full h-full object-cover" />
+            {activeMedia.kind === "image" ? (
+              <img src={heroSrc} alt={chalet.name} className="w-full h-full object-cover" />
+            ) : (
+              <video src={fileUrl(videos[activeMedia.idx])} controls className="w-full h-full object-cover bg-ink" />
+            )}
           </div>
           <div className="lg:col-span-4 grid grid-cols-2 lg:grid-cols-1 gap-4">
-            {[1,2].map((idx) => {
+            {[1, 2].map((idx) => {
               const img = images[idx];
               return (
                 <button
                   key={idx}
-                  onClick={() => img && setActive(idx)}
+                  onClick={() => img && setActiveMedia({ kind: "image", idx })}
                   data-testid={`gallery-thumb-${idx}`}
                   className="aspect-[16/10] lg:aspect-auto lg:h-full rounded-2xl overflow-hidden bg-muted group"
                 >
-                  <img
-                    src={img ? fileUrl(img) : `https://images.pexels.com/photos/${[32361209,29000312][idx-1]}/pexels-photo-${[32361209,29000312][idx-1]}.jpeg?w=940`}
-                    alt={`${chalet.name} ${idx}`}
-                    className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105"
-                  />
+                  {img ? (
+                    <img src={fileUrl(img)} alt="" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+                  ) : (
+                    <div className="w-full h-full bg-muted" />
+                  )}
                 </button>
               );
             })}
           </div>
         </div>
-        {images.length > 3 && (
+
+        {(images.length > 3 || videos.length > 0) && (
           <div className="flex gap-3 mt-4 overflow-x-auto pb-2">
             {images.slice(3).map((p, i) => (
               <button
                 key={p}
-                onClick={() => setActive(i + 3)}
+                onClick={() => setActiveMedia({ kind: "image", idx: i + 3 })}
                 className="w-28 h-20 rounded-lg overflow-hidden flex-shrink-0 ring-2 ring-transparent hover:ring-gold"
               >
                 <img src={fileUrl(p)} alt="" className="w-full h-full object-cover" />
+              </button>
+            ))}
+            {videos.map((p, i) => (
+              <button
+                key={p}
+                onClick={() => setActiveMedia({ kind: "video", idx: i })}
+                className="w-28 h-20 rounded-lg overflow-hidden flex-shrink-0 ring-2 ring-transparent hover:ring-gold bg-ink relative grid place-items-center text-bone"
+              >
+                <Film size={20} strokeWidth={1.5} />
+                <span className="absolute bottom-1 text-[10px]">فيديو {i + 1}</span>
               </button>
             ))}
           </div>
         )}
       </section>
 
-      {/* Main */}
+      {/* Main content */}
       <section className="container-wide pb-24">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12">
           <div className="lg:col-span-8 space-y-10">
-            {/* Header */}
             <div>
               {chalet.featured && (
                 <div className="inline-flex items-center gap-1.5 bg-gold/15 text-gold text-xs font-semibold px-3 py-1.5 rounded-full mb-4">
@@ -219,40 +234,52 @@ export default function ChaletDetail() {
                 {chalet.name}
               </h1>
               <div className="flex items-center flex-wrap gap-4 mt-4 text-inkSoft">
-                <div className="flex items-center gap-1.5">
-                  <MapPin size={14} strokeWidth={1.5} className="text-gold" />
-                  {chalet.location}
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <StarRating value={chalet.avg_rating || 0} size={14} testIdPrefix="detail-rating" />
-                  <span className="text-sm">
-                    {chalet.avg_rating?.toFixed?.(1) || "—"} ({chalet.reviews_count || 0} تقييم)
-                  </span>
-                </div>
+                <StarRating value={chalet.avg_rating || 0} size={14} testIdPrefix="detail-rating" />
+                <span className="text-sm">
+                  {chalet.avg_rating?.toFixed?.(1) || "—"} ({chalet.reviews_count || 0} تقييم)
+                </span>
+                {chalet.google_maps_url && (
+                  <a
+                    href={chalet.google_maps_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-testid="open-location-link"
+                    className="inline-flex items-center gap-1.5 text-gold hover:text-forest transition text-sm font-medium"
+                  >
+                    <MapPin size={14} strokeWidth={1.5} /> فتح الموقع
+                    <ExternalLink size={11} strokeWidth={1.5} />
+                  </a>
+                )}
+                {chalet.phone && (
+                  <a
+                    href={`tel:${chalet.phone}`}
+                    className="inline-flex items-center gap-1.5 text-forest hover:text-gold transition text-sm font-medium"
+                    dir="ltr"
+                  >
+                    <Phone size={14} strokeWidth={1.5} /> {chalet.phone}
+                  </a>
+                )}
               </div>
             </div>
 
             <div className="section-divider" />
 
-            {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div className="grid grid-cols-3 gap-6">
               <StatBlock icon={<BedDouble size={20} strokeWidth={1.5} />} label="الغرف" value={chalet.rooms} />
               <StatBlock icon={<Users size={20} strokeWidth={1.5} />} label="السعة" value={`${chalet.capacity} ضيوف`} />
-              <StatBlock icon={<Sparkles size={20} strokeWidth={1.5} />} label="المميزات" value={`${chalet.amenities?.length || 0}`} />
-              <StatBlock icon={<MapPin size={20} strokeWidth={1.5} />} label="العنوان" value={chalet.address || chalet.location} />
+              <StatBlock icon={<Sparkles size={20} strokeWidth={1.5} />} label="المميزات" value={`${chalet.features?.length || 0}`} />
             </div>
 
-            {/* Description */}
             <div>
               <h2 className="font-heading text-2xl text-forest mb-4">عن الشاليه</h2>
               <p className="text-ink leading-loose whitespace-pre-line">{chalet.description}</p>
             </div>
 
-            {chalet.amenities?.length > 0 && (
+            {chalet.features?.length > 0 && (
               <div>
                 <h2 className="font-heading text-2xl text-forest mb-5">المميزات</h2>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {chalet.amenities.map((a) => (
+                  {chalet.features.map((a) => (
                     <div key={a} className="flex items-center gap-2 text-ink">
                       <Check size={16} strokeWidth={1.5} className="text-gold shrink-0" />
                       <span className="text-sm">{a}</span>
@@ -264,38 +291,34 @@ export default function ChaletDetail() {
 
             <div className="section-divider" />
 
-            {/* Share & QR */}
             <div>
               <h2 className="font-heading text-2xl text-forest mb-5">شارك الشاليه</h2>
               <div className="bg-card border border-border/40 rounded-2xl p-6 space-y-5">
                 <ShareButtons url={publicUrl} title={chalet.name} />
-                <div className="flex flex-wrap items-center gap-3">
-                  <Dialog open={showQR} onOpenChange={setShowQR}>
-                    <DialogTrigger asChild>
-                      <Button variant="outline" data-testid="show-qr-btn" className="border-forest/20 text-forest hover:bg-forest hover:text-bone gap-2">
-                        <QrCode size={14} strokeWidth={1.5} /> رمز QR
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent dir="rtl" className="max-w-md">
-                      <DialogHeader>
-                        <DialogTitle className="font-heading text-2xl text-forest">رمز QR للشاليه</DialogTitle>
-                      </DialogHeader>
-                      <div id="chalet-qr" className="bg-white p-8 rounded-lg flex flex-col items-center gap-4">
-                        <QRCode value={publicUrl} size={220} bgColor="#FFFFFF" fgColor="#1A362D" />
-                        <p className="text-xs text-inkSoft break-all text-center">{publicUrl}</p>
-                      </div>
-                      <Button onClick={downloadQR} data-testid="download-qr-btn" className="bg-forest text-bone hover:bg-forest-dark gap-2">
-                        <Download size={14} /> تنزيل QR
-                      </Button>
-                    </DialogContent>
-                  </Dialog>
-                </div>
+                <Dialog open={showQR} onOpenChange={setShowQR}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" data-testid="show-qr-btn" className="border-forest/20 text-forest hover:bg-forest hover:text-bone gap-2">
+                      <QrCode size={14} strokeWidth={1.5} /> رمز QR
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent dir="rtl" className="max-w-md">
+                    <DialogHeader>
+                      <DialogTitle className="font-heading text-2xl text-forest">رمز QR للشاليه</DialogTitle>
+                    </DialogHeader>
+                    <div id="chalet-qr" className="bg-white p-8 rounded-lg flex flex-col items-center gap-4">
+                      <QRCode value={publicUrl} size={220} bgColor="#FFFFFF" fgColor="#1A362D" />
+                      <p className="text-xs text-inkSoft break-all text-center">{publicUrl}</p>
+                    </div>
+                    <Button onClick={downloadQR} data-testid="download-qr-btn" className="bg-forest text-bone hover:bg-forest-dark gap-2">
+                      <Download size={14} /> تنزيل QR
+                    </Button>
+                  </DialogContent>
+                </Dialog>
               </div>
             </div>
 
             <div className="section-divider" />
 
-            {/* Reviews */}
             <div>
               <div className="flex items-center justify-between mb-6">
                 <h2 className="font-heading text-2xl text-forest">التقييمات ({reviews.length})</h2>
@@ -355,97 +378,121 @@ export default function ChaletDetail() {
             </div>
           </div>
 
-          {/* Booking sidebar */}
+          {/* Slots sidebar */}
           <aside className="lg:col-span-4">
-            <div className="sticky top-28 bg-card border border-border/40 rounded-2xl p-7 luxury-shadow">
-              <div className="flex items-end justify-between mb-6">
-                <div>
-                  <div className="text-xs text-inkSoft">السعر / ليلة</div>
-                  <div className="font-heading text-3xl text-forest mt-1">
-                    {chalet.price_per_night?.toLocaleString("ar")}
-                    <span className="text-base text-gold font-body mr-1">ر.س</span>
-                  </div>
-                </div>
-                <div className="text-xs text-gold font-medium">الدفع عند الوصول</div>
+            <div className="sticky top-28 bg-card border border-border/40 rounded-2xl p-6 luxury-shadow space-y-4" data-testid="slots-sidebar">
+              <div>
+                <div className="font-heading text-xl text-forest">المواعيد المتاحة</div>
+                <p className="text-xs text-inkSoft mt-1">اختر موعداً لإرسال طلب الحجز</p>
+                <div className="text-[11px] text-gold mt-2">الدفع نقداً عند الوصول</div>
               </div>
 
-              <form onSubmit={submitBooking} className="space-y-4" data-testid="booking-form">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs text-inkSoft">الوصول</Label>
-                    <Input
-                      data-testid="booking-checkin"
-                      type="date" required
-                      value={checkIn}
-                      onChange={(e) => setCheckIn(e.target.value)}
-                      className="bg-bone border-forest/10 mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs text-inkSoft">المغادرة</Label>
-                    <Input
-                      data-testid="booking-checkout"
-                      type="date" required
-                      value={checkOut}
-                      onChange={(e) => setCheckOut(e.target.value)}
-                      className="bg-bone border-forest/10 mt-1"
-                    />
-                  </div>
+              {Object.keys(groupedSlots).length === 0 ? (
+                <div className="text-center py-10 text-sm text-inkSoft border border-dashed border-forest/15 rounded-lg">
+                  لا توجد مواعيد متاحة حالياً
                 </div>
-
-                <div>
-                  <Label className="text-xs text-inkSoft">عدد الضيوف</Label>
-                  <Input
-                    data-testid="booking-guests"
-                    type="number" min="1" max={chalet.capacity}
-                    value={guests}
-                    onChange={(e) => setGuests(e.target.value)}
-                    className="bg-bone border-forest/10 mt-1"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <Label className="text-xs text-inkSoft">ملاحظات (اختياري)</Label>
-                  <Textarea
-                    data-testid="booking-notes"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    rows={3}
-                    placeholder="أي تفاصيل تخص إقامتك..."
-                    className="bg-bone border-forest/10 mt-1"
-                  />
-                </div>
-
-                {nights > 0 && (
-                  <div className="bg-bone rounded-lg p-4 space-y-2 text-sm">
-                    <div className="flex justify-between text-ink">
-                      <span>{chalet.price_per_night} × {nights} ليلة</span>
-                      <span>{total.toLocaleString("ar")} ر.س</span>
+              ) : (
+                <div className="space-y-4 max-h-[480px] overflow-y-auto pr-1">
+                  {Object.keys(groupedSlots).sort().map((d) => (
+                    <div key={d}>
+                      <div className="flex items-center gap-2 text-xs text-forest font-medium mb-2">
+                        <Calendar size={12} strokeWidth={1.5} className="text-gold" />
+                        {new Date(d).toLocaleDateString("ar", { weekday: "long", day: "numeric", month: "long" })}
+                      </div>
+                      <div className="space-y-2">
+                        {groupedSlots[d].sort((a, b) => a.start_time.localeCompare(b.start_time)).map((s) => {
+                          const isBooked = s.status === "booked";
+                          return (
+                            <button
+                              key={s.id}
+                              type="button"
+                              data-testid={`slot-${s.id}`}
+                              disabled={isBooked}
+                              onClick={() => !isBooked && setSelectedSlot(s)}
+                              className={`w-full text-right p-3 rounded-lg border transition flex items-center justify-between ${
+                                isBooked
+                                  ? "bg-muted text-inkSoft border-border/40 cursor-not-allowed"
+                                  : "bg-bone border-forest/10 hover:border-gold hover:bg-gold/5"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 text-sm">
+                                <Clock size={12} strokeWidth={1.5} className="text-gold" />
+                                <span dir="ltr">{s.start_time} - {s.end_time}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-heading text-forest">
+                                  {s.price?.toLocaleString("ar")} <span className="text-xs text-gold">₪</span>
+                                </span>
+                                {isBooked && (
+                                  <span className="text-[10px] bg-gold/15 text-gold px-2 py-0.5 rounded-full">محجوز</span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="pt-2 border-t border-border/40 flex justify-between font-heading text-lg text-forest">
-                      <span>الإجمالي</span>
-                      <span>{total.toLocaleString("ar")} ر.س</span>
-                    </div>
-                  </div>
-                )}
-
-                <Button
-                  type="submit"
-                  disabled={bookingLoading}
-                  data-testid="booking-submit-btn"
-                  className="w-full bg-forest text-bone hover:bg-forest-dark rounded-xl py-6 text-base font-semibold"
-                >
-                  {bookingLoading ? "..." : user ? "اطلب الحجز" : "سجّل الدخول للحجز"}
-                </Button>
-                <p className="text-xs text-inkSoft text-center">
-                  لن يتم الخصم تلقائياً — الدفع نقداً عند الوصول
-                </p>
-              </form>
+                  ))}
+                </div>
+              )}
             </div>
           </aside>
         </div>
       </section>
+
+      {/* Booking dialog */}
+      <Dialog open={!!selectedSlot} onOpenChange={(o) => !o && setSelectedSlot(null)}>
+        <DialogContent dir="rtl" className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-heading text-2xl text-forest">تأكيد طلب الحجز</DialogTitle>
+          </DialogHeader>
+          {selectedSlot && (
+            <div className="space-y-4">
+              <div className="bg-bone rounded-lg p-4 space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-inkSoft">الشاليه</span>
+                  <span className="font-medium">{chalet.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-inkSoft">التاريخ</span>
+                  <span className="font-medium">{new Date(selectedSlot.date).toLocaleDateString("ar")}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-inkSoft">الوقت</span>
+                  <span className="font-medium" dir="ltr">{selectedSlot.start_time} - {selectedSlot.end_time}</span>
+                </div>
+                <div className="flex justify-between pt-2 border-t border-border/40 font-heading text-lg text-forest">
+                  <span>الإجمالي</span>
+                  <span>{selectedSlot.price?.toLocaleString("ar")} ₪</span>
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-inkSoft">ملاحظات (اختياري)</Label>
+                <Textarea
+                  data-testid="booking-notes"
+                  value={bookingNotes}
+                  onChange={(e) => setBookingNotes(e.target.value)}
+                  rows={3}
+                  placeholder="أي تفاصيل تخص الحجز..."
+                  className="bg-bone border-forest/10 mt-1"
+                />
+              </div>
+              <p className="text-xs text-inkSoft">الدفع نقداً عند الوصول.</p>
+            </div>
+          )}
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              onClick={submitBooking}
+              disabled={bookingLoading}
+              data-testid="booking-submit-btn"
+              className="bg-forest text-bone hover:bg-forest-dark"
+            >
+              {bookingLoading ? "..." : user ? "إرسال طلب الحجز" : "سجّل الدخول للحجز"}
+            </Button>
+            <Button variant="outline" onClick={() => setSelectedSlot(null)}>إلغاء</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 }

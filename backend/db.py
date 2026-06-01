@@ -13,6 +13,7 @@ def close_db():
 # Collections
 users_col = db["users"]
 chalets_col = db["chalets"]
+slots_col = db["slots"]
 bookings_col = db["bookings"]
 reviews_col = db["reviews"]
 notifications_col = db["notifications"]

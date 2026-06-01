@@ -33,7 +33,7 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
         f"{STORAGE_URL}/objects/{path}",
         headers={"X-Storage-Key": key, "Content-Type": content_type},
         data=data,
-        timeout=120,
+        timeout=180,
     )
     resp.raise_for_status()
     return resp.json()
@@ -44,16 +44,25 @@ def get_object(path: str) -> tuple[bytes, str]:
     resp = requests.get(
         f"{STORAGE_URL}/objects/{path}",
         headers={"X-Storage-Key": key},
-        timeout=60,
+        timeout=120,
     )
     resp.raise_for_status()
     return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
-MIME_TYPES = {
+IMAGE_MIME = {
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
     "png": "image/png",
     "gif": "image/gif",
     "webp": "image/webp",
 }
+
+VIDEO_MIME = {
+    "mp4": "video/mp4",
+    "mov": "video/quicktime",
+    "webm": "video/webm",
+    "m4v": "video/mp4",
+}
+
+ALL_MIME = {**IMAGE_MIME, **VIDEO_MIME}

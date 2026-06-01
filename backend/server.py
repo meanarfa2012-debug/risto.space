@@ -1,9 +1,7 @@
 """Resto - Premium Arabic chalet booking platform - Main FastAPI server."""
-import io
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,22 +12,19 @@ load_dotenv(ROOT_DIR / ".env")
 
 from fastapi import (
     APIRouter,
+    Depends,
     FastAPI,
     File,
-    Header,
     HTTPException,
     Query,
     Response,
     UploadFile,
-    Depends,
 )
-from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 
 from auth import (
     create_access_token,
     get_current_user,
-    get_optional_user,
     hash_password,
     require_role,
     verify_password,
@@ -40,6 +35,7 @@ from db import (
     files_col,
     notifications_col,
     reviews_col,
+    slots_col,
     users_col,
     close_db,
 )
@@ -51,17 +47,28 @@ from models import (
     ChaletCreate,
     ChaletUpdate,
     CustomerLogin,
-    Notification,
     OwnerLogin,
     OwnerRegister,
     Review,
     ReviewCreate,
+    Slot,
+    SlotBulkCreate,
+    SlotCreate,
+    SlotUpdate,
     User,
     utc_now_iso,
 )
 from notifications import push_admin_notification, push_notification
-from storage import APP_NAME, MIME_TYPES, get_object, init_storage, put_object
-from utils import count_nights, generate_unique_slug, is_valid_date
+from storage import (
+    ALL_MIME,
+    APP_NAME,
+    IMAGE_MIME,
+    VIDEO_MIME,
+    get_object,
+    init_storage,
+    put_object,
+)
+from utils import generate_unique_slug
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,7 +84,6 @@ api = APIRouter(prefix="/api")
 
 @app.on_event("startup")
 async def on_startup():
-    # Seed admin
     admin_email = os.environ["ADMIN_EMAIL"]
     admin_password = os.environ["ADMIN_PASSWORD"]
     existing = await users_col.find_one({"email": admin_email, "role": "admin"})
@@ -91,13 +97,11 @@ async def on_startup():
         await users_col.insert_one(admin.model_dump())
         logger.info("Admin user seeded: %s", admin_email)
     else:
-        # Update password to match the env (so admin pwd is always source of truth)
         await users_col.update_one(
             {"id": existing["id"]},
             {"$set": {"password_hash": hash_password(admin_password)}},
         )
 
-    # Init storage
     try:
         init_storage()
         logger.info("Object storage initialized")
@@ -126,7 +130,6 @@ async def customer_login(payload: CustomerLogin):
         raise HTTPException(status_code=400, detail="رقم الهاتف مطلوب")
     user_doc = await users_col.find_one({"role": "customer", "phone": phone})
     if not user_doc:
-        # auto-register
         user = User(
             role="customer",
             name=payload.name or f"عميل {phone[-4:]}",
@@ -135,7 +138,6 @@ async def customer_login(payload: CustomerLogin):
         await users_col.insert_one(user.model_dump())
         user_doc = user.model_dump()
     else:
-        # update name if provided
         if payload.name and payload.name != user_doc.get("name"):
             await users_col.update_one(
                 {"id": user_doc["id"]}, {"$set": {"name": payload.name}}
@@ -168,7 +170,6 @@ async def owner_register(payload: OwnerRegister):
     )
     await users_col.insert_one(user.model_dump())
 
-    # admin notification: new owner
     await push_admin_notification(
         type_="owner_registered",
         title="تسجيل مالك جديد",
@@ -225,26 +226,31 @@ async def upload_file(
     user: dict = Depends(require_role("owner", "admin")),
 ):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "bin"
-    if ext not in MIME_TYPES:
+    if ext not in ALL_MIME:
         raise HTTPException(status_code=400, detail="نوع الملف غير مدعوم")
-    path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4().hex}.{ext}"
+    kind = "image" if ext in IMAGE_MIME else "video"
+    path = f"{APP_NAME}/uploads/{user['id']}/{kind}/{uuid.uuid4().hex}.{ext}"
     data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="حجم الملف يتجاوز 10 ميجابايت")
-    content_type = MIME_TYPES.get(ext, "application/octet-stream")
+    max_size = 100 * 1024 * 1024 if kind == "video" else 10 * 1024 * 1024
+    if len(data) > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"الحجم يتجاوز {max_size // (1024 * 1024)} ميجابايت",
+        )
+    content_type = ALL_MIME.get(ext, "application/octet-stream")
     result = put_object(path, data, content_type)
-    record = {
+    await files_col.insert_one({
         "id": str(uuid.uuid4()),
         "storage_path": result["path"],
         "original_filename": file.filename,
         "content_type": content_type,
+        "kind": kind,
         "size": result.get("size", len(data)),
         "owner_id": user["id"],
         "is_deleted": False,
         "created_at": utc_now_iso(),
-    }
-    await files_col.insert_one(record)
-    return {"path": result["path"], "url": f"/api/files/{result['path']}"}
+    })
+    return {"path": result["path"], "url": f"/api/files/{result['path']}", "kind": kind}
 
 
 @api.get("/files/{path:path}")
@@ -262,24 +268,17 @@ async def serve_file(path: str):
 
 # =============== CHALETS ===============
 
-async def _enrich_chalet(doc: dict) -> dict:
-    doc.pop("_id", None)
-    return doc
-
-
 @api.get("/chalets")
 async def list_chalets(
     q: Optional[str] = None,
-    location: Optional[str] = None,
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
     rooms: Optional[int] = None,
     capacity: Optional[int] = None,
     min_rating: Optional[float] = None,
-    check_in: Optional[str] = None,
-    check_out: Optional[str] = None,
+    date: Optional[str] = None,  # filter by chalets having available slot on date
     featured: Optional[bool] = None,
-    sort: str = "newest",  # newest | top_rated | price_asc | price_desc
+    sort: str = "newest",
     limit: int = 50,
     skip: int = 0,
 ):
@@ -288,17 +287,7 @@ async def list_chalets(
         query["$or"] = [
             {"name": {"$regex": q, "$options": "i"}},
             {"description": {"$regex": q, "$options": "i"}},
-            {"location": {"$regex": q, "$options": "i"}},
         ]
-    if location:
-        query["location"] = {"$regex": location, "$options": "i"}
-    if min_price is not None or max_price is not None:
-        pr = {}
-        if min_price is not None:
-            pr["$gte"] = min_price
-        if max_price is not None:
-            pr["$lte"] = max_price
-        query["price_per_night"] = pr
     if rooms is not None:
         query["rooms"] = {"$gte": rooms}
     if capacity is not None:
@@ -311,53 +300,39 @@ async def list_chalets(
     sort_map = {
         "newest": [("created_at", -1)],
         "top_rated": [("avg_rating", -1), ("reviews_count", -1)],
-        "price_asc": [("price_per_night", 1)],
-        "price_desc": [("price_per_night", -1)],
+        "price_asc": [("starting_price", 1)],
+        "price_desc": [("starting_price", -1)],
     }
     sort_spec = sort_map.get(sort, [("created_at", -1)])
 
-    cursor = chalets_col.find(query, {"_id": 0}).sort(sort_spec).skip(skip).limit(limit)
-    chalets = await cursor.to_list(length=limit)
+    chalets = await chalets_col.find(query, {"_id": 0}).sort(sort_spec).skip(skip).limit(limit).to_list(length=limit)
 
-    # date availability filter
-    if check_in and check_out and is_valid_date(check_in) and is_valid_date(check_out):
+    # Filter by available slots
+    if date or min_price is not None or max_price is not None:
         chalet_ids = [c["id"] for c in chalets]
-        conflicts = await bookings_col.find(
-            {
-                "chalet_id": {"$in": chalet_ids},
-                "status": {"$in": ["pending", "accepted"]},
-                "$or": [
-                    {"check_in": {"$lt": check_out}, "check_out": {"$gt": check_in}},
-                ],
-            },
-            {"chalet_id": 1, "_id": 0},
-        ).to_list(length=1000)
-        blocked = {b["chalet_id"] for b in conflicts}
-        chalets = [c for c in chalets if c["id"] not in blocked]
+        slot_q: dict = {"chalet_id": {"$in": chalet_ids}, "status": "available"}
+        if date:
+            slot_q["date"] = date
+        if min_price is not None:
+            slot_q["price"] = slot_q.get("price", {})
+            slot_q["price"]["$gte"] = min_price
+        if max_price is not None:
+            slot_q["price"] = slot_q.get("price", {})
+            slot_q["price"]["$lte"] = max_price
+        matching_slots = await slots_col.find(slot_q, {"chalet_id": 1, "_id": 0}).to_list(length=10000)
+        ids_with_slots = {s["chalet_id"] for s in matching_slots}
+        chalets = [c for c in chalets if c["id"] in ids_with_slots]
 
     return chalets
 
 
 @api.get("/chalets/homepage")
 async def homepage_data():
-    featured = await chalets_col.find(
-        {"status": "approved", "featured": True}, {"_id": 0}
-    ).sort([("avg_rating", -1)]).limit(6).to_list(length=6)
-    new_chalets = await chalets_col.find(
-        {"status": "approved"}, {"_id": 0}
-    ).sort([("created_at", -1)]).limit(6).to_list(length=6)
-    top_rated = await chalets_col.find(
-        {"status": "approved", "reviews_count": {"$gt": 0}}, {"_id": 0}
-    ).sort([("avg_rating", -1), ("reviews_count", -1)]).limit(6).to_list(length=6)
-    latest_reviews = await reviews_col.find({"reported": False}, {"_id": 0}).sort(
-        [("created_at", -1)]
-    ).limit(6).to_list(length=6)
-    return {
-        "featured": featured,
-        "new": new_chalets,
-        "top_rated": top_rated,
-        "latest_reviews": latest_reviews,
-    }
+    base = {"status": "approved"}
+    featured = await chalets_col.find({**base, "featured": True}, {"_id": 0}).sort([("avg_rating", -1)]).limit(8).to_list(length=8)
+    new_chalets = await chalets_col.find(base, {"_id": 0}).sort([("created_at", -1)]).limit(8).to_list(length=8)
+    top_rated = await chalets_col.find({**base, "reviews_count": {"$gt": 0}}, {"_id": 0}).sort([("avg_rating", -1), ("reviews_count", -1)]).limit(8).to_list(length=8)
+    return {"featured": featured, "new": new_chalets, "top_rated": top_rated}
 
 
 @api.get("/chalets/by-slug/{slug}")
@@ -377,35 +352,35 @@ async def get_chalet(chalet_id: str):
 
 
 @api.post("/chalets")
-async def create_chalet(
-    payload: ChaletCreate,
-    user: dict = Depends(require_role("owner")),
-):
+async def create_chalet(payload: ChaletCreate, user: dict = Depends(require_role("owner"))):
     slug = await generate_unique_slug(payload.name)
     chalet = Chalet(
         owner_id=user["id"],
         owner_name=user["name"],
         slug=slug,
+        status="pending",
         **payload.model_dump(),
     )
     await chalets_col.insert_one(chalet.model_dump())
 
-    # Notify admin of new chalet
     await push_admin_notification(
         type_="chalet_registered",
-        title="شاليه جديد مسجل",
-        message=f"تم تسجيل شاليه جديد: {chalet.name}",
+        title="شاليه جديد بانتظار المراجعة",
+        message=f"تم تسجيل شاليه جديد: {chalet.name} — بانتظار اعتماد المسؤول.",
         link="/admin/dashboard",
+    )
+    await push_notification(
+        user["id"], "owner",
+        "chalet_pending",
+        "شاليهك قيد المراجعة",
+        f"تم استلام شاليه {chalet.name}. سيظهر للعملاء بعد اعتماد المسؤول.",
+        link="/owner/dashboard",
     )
     return chalet.model_dump()
 
 
 @api.put("/chalets/{chalet_id}")
-async def update_chalet(
-    chalet_id: str,
-    payload: ChaletUpdate,
-    user: dict = Depends(require_role("owner", "admin")),
-):
+async def update_chalet(chalet_id: str, payload: ChaletUpdate, user: dict = Depends(require_role("owner", "admin"))):
     doc = await chalets_col.find_one({"id": chalet_id})
     if not doc:
         raise HTTPException(status_code=404, detail="الشاليه غير موجود")
@@ -414,114 +389,187 @@ async def update_chalet(
     update = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
     update["updated_at"] = utc_now_iso()
     await chalets_col.update_one({"id": chalet_id}, {"$set": update})
-    new_doc = await chalets_col.find_one({"id": chalet_id}, {"_id": 0})
-    return new_doc
+    return await chalets_col.find_one({"id": chalet_id}, {"_id": 0})
 
 
 @api.delete("/chalets/{chalet_id}")
-async def delete_chalet(
-    chalet_id: str,
-    user: dict = Depends(require_role("owner", "admin")),
-):
+async def delete_chalet(chalet_id: str, user: dict = Depends(require_role("owner", "admin"))):
     doc = await chalets_col.find_one({"id": chalet_id})
     if not doc:
         raise HTTPException(status_code=404, detail="الشاليه غير موجود")
     if user["role"] != "admin" and doc["owner_id"] != user["id"]:
         raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
     await chalets_col.delete_one({"id": chalet_id})
+    await slots_col.delete_many({"chalet_id": chalet_id})
     return {"ok": True}
 
 
 @api.get("/owner/chalets")
 async def owner_chalets(user: dict = Depends(require_role("owner"))):
-    cursor = chalets_col.find({"owner_id": user["id"]}, {"_id": 0}).sort(
-        [("created_at", -1)]
-    )
-    return await cursor.to_list(length=200)
+    return await chalets_col.find({"owner_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=200)
+
+
+# =============== SLOTS ===============
+
+async def _update_starting_price(chalet_id: str):
+    """Recompute the starting (min) price for a chalet from its available slots."""
+    pipeline = [
+        {"$match": {"chalet_id": chalet_id, "status": "available"}},
+        {"$group": {"_id": "$chalet_id", "min_price": {"$min": "$price"}}},
+    ]
+    res = await slots_col.aggregate(pipeline).to_list(length=1)
+    starting = res[0]["min_price"] if res else 0.0
+    await chalets_col.update_one({"id": chalet_id}, {"$set": {"starting_price": starting}})
+
+
+@api.get("/chalets/{chalet_id}/slots")
+async def list_slots(chalet_id: str, date: Optional[str] = None, status: Optional[str] = None):
+    q = {"chalet_id": chalet_id}
+    if date:
+        q["date"] = date
+    if status:
+        q["status"] = status
+    return await slots_col.find(q, {"_id": 0}).sort([("date", 1), ("start_time", 1)]).to_list(length=500)
+
+
+@api.post("/chalets/{chalet_id}/slots")
+async def create_slot(chalet_id: str, payload: SlotCreate, user: dict = Depends(require_role("owner"))):
+    chalet = await chalets_col.find_one({"id": chalet_id})
+    if not chalet:
+        raise HTTPException(status_code=404, detail="الشاليه غير موجود")
+    if chalet["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
+    slot = Slot(chalet_id=chalet_id, owner_id=user["id"], **payload.model_dump())
+    await slots_col.insert_one(slot.model_dump())
+    await _update_starting_price(chalet_id)
+    return slot.model_dump()
+
+
+@api.post("/chalets/{chalet_id}/slots/bulk")
+async def create_slots_bulk(chalet_id: str, payload: SlotBulkCreate, user: dict = Depends(require_role("owner"))):
+    chalet = await chalets_col.find_one({"id": chalet_id})
+    if not chalet or chalet["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
+    docs = []
+    for s in payload.slots:
+        slot = Slot(chalet_id=chalet_id, owner_id=user["id"], **s.model_dump())
+        docs.append(slot.model_dump())
+    if docs:
+        await slots_col.insert_many(docs)
+    await _update_starting_price(chalet_id)
+    return {"created": len(docs)}
+
+
+@api.put("/slots/{slot_id}")
+async def update_slot(slot_id: str, payload: SlotUpdate, user: dict = Depends(require_role("owner", "admin"))):
+    doc = await slots_col.find_one({"id": slot_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="الموعد غير موجود")
+    if user["role"] != "admin" and doc["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
+    if doc.get("status") == "booked":
+        raise HTTPException(status_code=400, detail="لا يمكن تعديل موعد محجوز")
+    update = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    await slots_col.update_one({"id": slot_id}, {"$set": update})
+    await _update_starting_price(doc["chalet_id"])
+    return await slots_col.find_one({"id": slot_id}, {"_id": 0})
+
+
+@api.delete("/slots/{slot_id}")
+async def delete_slot(slot_id: str, user: dict = Depends(require_role("owner", "admin"))):
+    doc = await slots_col.find_one({"id": slot_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="الموعد غير موجود")
+    if user["role"] != "admin" and doc["owner_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="ليس لديك الصلاحية")
+    if doc.get("status") == "booked":
+        raise HTTPException(status_code=400, detail="لا يمكن حذف موعد محجوز")
+    await slots_col.delete_one({"id": slot_id})
+    await _update_starting_price(doc["chalet_id"])
+    return {"ok": True}
 
 
 # =============== BOOKINGS ===============
 
 @api.post("/bookings")
-async def create_booking(
-    payload: BookingCreate,
-    user: dict = Depends(require_role("customer")),
-):
-    chalet = await chalets_col.find_one({"id": payload.chalet_id})
-    if not chalet:
-        raise HTTPException(status_code=404, detail="الشاليه غير موجود")
-    if not is_valid_date(payload.check_in) or not is_valid_date(payload.check_out):
-        raise HTTPException(status_code=400, detail="تواريخ غير صالحة")
-    nights = count_nights(payload.check_in, payload.check_out)
-    if nights < 1:
-        raise HTTPException(status_code=400, detail="يجب أن يكون تاريخ المغادرة بعد الوصول")
-
-    # check conflicts
-    conflict = await bookings_col.find_one(
-        {
-            "chalet_id": payload.chalet_id,
-            "status": {"$in": ["pending", "accepted"]},
-            "check_in": {"$lt": payload.check_out},
-            "check_out": {"$gt": payload.check_in},
-        }
-    )
-    if conflict:
-        raise HTTPException(status_code=400, detail="التواريخ غير متاحة لهذا الشاليه")
+async def create_booking(payload: BookingCreate, user: dict = Depends(require_role("customer"))):
+    slot = await slots_col.find_one({"id": payload.slot_id})
+    if not slot:
+        raise HTTPException(status_code=404, detail="الموعد غير موجود")
+    if slot["status"] != "available":
+        raise HTTPException(status_code=400, detail="هذا الموعد غير متاح")
+    chalet = await chalets_col.find_one({"id": slot["chalet_id"]})
+    if not chalet or chalet.get("status") != "approved":
+        raise HTTPException(status_code=400, detail="الشاليه غير متاح للحجز")
 
     user_doc = await users_col.find_one({"id": user["id"]})
     customer_name = payload.customer_name or user_doc.get("name") or "عميل"
     customer_phone = payload.customer_phone or user_doc.get("phone") or ""
 
-    total_price = nights * float(chalet["price_per_night"])
     booking = Booking(
+        slot_id=slot["id"],
         chalet_id=chalet["id"],
         chalet_name=chalet["name"],
-        chalet_slug=chalet.get("slug"),
+        chalet_slug=chalet["slug"],
         customer_id=user["id"],
         customer_name=customer_name,
         customer_phone=customer_phone,
         owner_id=chalet["owner_id"],
-        check_in=payload.check_in,
-        check_out=payload.check_out,
-        guests=payload.guests,
-        nights=nights,
-        total_price=total_price,
+        slot_date=slot["date"],
+        slot_start=slot["start_time"],
+        slot_end=slot["end_time"],
+        total_price=float(slot["price"]),
         notes=payload.notes or "",
     )
+    # Atomically lock the slot
+    lock_res = await slots_col.update_one(
+        {"id": slot["id"], "status": "available"},
+        {"$set": {"status": "booked", "booking_id": booking.id}},
+    )
+    if lock_res.modified_count == 0:
+        raise HTTPException(status_code=409, detail="تم حجز هذا الموعد للتو، يُرجى اختيار موعد آخر")
+
     await bookings_col.insert_one(booking.model_dump())
 
-    # Notifications
+    # Notifications: customer, owner, AND admin
     await push_notification(
         user["id"], "customer",
         "booking_submitted",
         "تم إرسال طلب الحجز",
-        f"تم إرسال طلب حجزك لشاليه {chalet['name']} بانتظار موافقة المالك.",
+        f"تم إرسال طلب حجزك لشاليه {chalet['name']} ({slot['date']} {slot['start_time']}-{slot['end_time']}). بانتظار موافقة المالك.",
         link="/my-bookings",
     )
     await push_notification(
         chalet["owner_id"], "owner",
         "new_booking",
         "طلب حجز جديد",
-        f"تلقيت طلب حجز جديد لشاليه {chalet['name']} من {customer_name}.",
+        f"تلقيت طلب حجز جديد لشاليه {chalet['name']} من {customer_name} ({slot['date']} {slot['start_time']}-{slot['end_time']}).",
         link="/owner/dashboard",
+    )
+    await push_admin_notification(
+        type_="new_booking",
+        title="حجز جديد على المنصة",
+        message=f"حجز جديد لشاليه {chalet['name']} من {customer_name} ({slot['date']}).",
+        link="/admin/dashboard",
     )
     return booking.model_dump()
 
 
 @api.get("/bookings/me")
 async def my_bookings(user: dict = Depends(require_role("customer"))):
-    cursor = bookings_col.find({"customer_id": user["id"]}, {"_id": 0}).sort(
-        [("created_at", -1)]
-    )
-    return await cursor.to_list(length=200)
+    return await bookings_col.find({"customer_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=200)
 
 
 @api.get("/bookings/owner")
 async def owner_bookings(user: dict = Depends(require_role("owner"))):
-    cursor = bookings_col.find({"owner_id": user["id"]}, {"_id": 0}).sort(
-        [("created_at", -1)]
+    return await bookings_col.find({"owner_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=200)
+
+
+async def _release_slot(slot_id: str):
+    await slots_col.update_one(
+        {"id": slot_id},
+        {"$set": {"status": "available", "booking_id": None}},
     )
-    return await cursor.to_list(length=200)
 
 
 @api.post("/bookings/{booking_id}/accept")
@@ -536,7 +584,7 @@ async def accept_booking(booking_id: str, user: dict = Depends(require_role("own
         booking["customer_id"], "customer",
         "booking_accepted",
         "تم قبول حجزك",
-        f"تم قبول حجزك لشاليه {booking['chalet_name']}. الدفع عند الوصول.",
+        f"تم قبول حجزك لشاليه {booking['chalet_name']} ({booking['slot_date']}). الدفع عند الوصول.",
         link="/my-bookings",
     )
     return {"ok": True}
@@ -550,6 +598,8 @@ async def reject_booking(booking_id: str, user: dict = Depends(require_role("own
     if booking["status"] != "pending":
         raise HTTPException(status_code=400, detail="الحجز ليس قيد الانتظار")
     await bookings_col.update_one({"id": booking_id}, {"$set": {"status": "rejected"}})
+    await _release_slot(booking["slot_id"])
+    await _update_starting_price(booking["chalet_id"])
     await push_notification(
         booking["customer_id"], "customer",
         "booking_rejected",
@@ -568,6 +618,8 @@ async def cancel_booking(booking_id: str, user: dict = Depends(require_role("cus
     if booking["status"] not in ("pending", "accepted"):
         raise HTTPException(status_code=400, detail="لا يمكن إلغاء هذا الحجز")
     await bookings_col.update_one({"id": booking_id}, {"$set": {"status": "cancelled"}})
+    await _release_slot(booking["slot_id"])
+    await _update_starting_price(booking["chalet_id"])
     await push_notification(
         booking["owner_id"], "owner",
         "booking_cancelled",
@@ -598,17 +650,12 @@ async def _recompute_rating(chalet_id: str):
 
 
 @api.post("/reviews")
-async def create_review(
-    payload: ReviewCreate,
-    user: dict = Depends(require_role("customer")),
-):
+async def create_review(payload: ReviewCreate, user: dict = Depends(require_role("customer"))):
     if payload.rating < 1 or payload.rating > 5:
         raise HTTPException(status_code=400, detail="التقييم بين 1 و 5")
     chalet = await chalets_col.find_one({"id": payload.chalet_id})
     if not chalet:
         raise HTTPException(status_code=404, detail="الشاليه غير موجود")
-
-    # Optional: only allow if customer has an accepted booking
     has_booking = await bookings_col.find_one(
         {"chalet_id": payload.chalet_id, "customer_id": user["id"], "status": "accepted"}
     )
@@ -640,10 +687,7 @@ async def create_review(
 
 @api.get("/reviews/chalet/{chalet_id}")
 async def reviews_for_chalet(chalet_id: str):
-    cursor = reviews_col.find(
-        {"chalet_id": chalet_id, "reported": False}, {"_id": 0}
-    ).sort([("created_at", -1)])
-    return await cursor.to_list(length=200)
+    return await reviews_col.find({"chalet_id": chalet_id, "reported": False}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=200)
 
 
 @api.post("/reviews/{review_id}/report")
@@ -675,29 +719,20 @@ async def delete_review(review_id: str, user: dict = Depends(require_role("admin
 
 @api.get("/notifications")
 async def list_notifications(user: dict = Depends(get_current_user)):
-    cursor = notifications_col.find({"user_id": user["id"]}, {"_id": 0}).sort(
-        [("created_at", -1)]
-    ).limit(100)
-    items = await cursor.to_list(length=100)
-    unread = await notifications_col.count_documents(
-        {"user_id": user["id"], "read": False}
-    )
+    items = await notifications_col.find({"user_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).limit(100).to_list(length=100)
+    unread = await notifications_col.count_documents({"user_id": user["id"], "read": False})
     return {"items": items, "unread": unread}
 
 
 @api.post("/notifications/{notif_id}/read")
 async def mark_read(notif_id: str, user: dict = Depends(get_current_user)):
-    await notifications_col.update_one(
-        {"id": notif_id, "user_id": user["id"]}, {"$set": {"read": True}}
-    )
+    await notifications_col.update_one({"id": notif_id, "user_id": user["id"]}, {"$set": {"read": True}})
     return {"ok": True}
 
 
 @api.post("/notifications/read-all")
 async def mark_all_read(user: dict = Depends(get_current_user)):
-    await notifications_col.update_many(
-        {"user_id": user["id"], "read": False}, {"$set": {"read": True}}
-    )
+    await notifications_col.update_many({"user_id": user["id"], "read": False}, {"$set": {"read": True}})
     return {"ok": True}
 
 
@@ -710,6 +745,7 @@ async def admin_stats(user: dict = Depends(require_role("admin"))):
         "owners": await users_col.count_documents({"role": "owner"}),
         "customers": await users_col.count_documents({"role": "customer"}),
         "chalets": await chalets_col.count_documents({}),
+        "pending_chalets": await chalets_col.count_documents({"status": "pending"}),
         "bookings": await bookings_col.count_documents({}),
         "reviews": await reviews_col.count_documents({}),
         "reported_reviews": await reviews_col.count_documents({"reported": True}),
@@ -718,58 +754,72 @@ async def admin_stats(user: dict = Depends(require_role("admin"))):
 
 @api.get("/admin/chalets")
 async def admin_all_chalets(user: dict = Depends(require_role("admin"))):
-    cursor = chalets_col.find({}, {"_id": 0}).sort([("created_at", -1)])
-    return await cursor.to_list(length=500)
+    return await chalets_col.find({}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=500)
 
 
 @api.post("/admin/chalets/{chalet_id}/feature")
-async def admin_feature_chalet(
-    chalet_id: str,
-    featured: bool = Query(...),
-    user: dict = Depends(require_role("admin")),
-):
-    res = await chalets_col.update_one(
-        {"id": chalet_id}, {"$set": {"featured": featured}}
-    )
+async def admin_feature_chalet(chalet_id: str, featured: bool = Query(...), user: dict = Depends(require_role("admin"))):
+    res = await chalets_col.update_one({"id": chalet_id}, {"$set": {"featured": featured}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="الشاليه غير موجود")
     return {"ok": True, "featured": featured}
 
 
 @api.post("/admin/chalets/{chalet_id}/status")
-async def admin_set_status(
-    chalet_id: str,
-    status: str = Query(...),
-    user: dict = Depends(require_role("admin")),
-):
-    if status not in ("pending", "approved", "rejected"):
+async def admin_set_status(chalet_id: str, status: str = Query(...), user: dict = Depends(require_role("admin"))):
+    if status not in ("pending", "approved", "rejected", "suspended"):
         raise HTTPException(status_code=400, detail="حالة غير صحيحة")
+    chalet = await chalets_col.find_one({"id": chalet_id})
+    if not chalet:
+        raise HTTPException(status_code=404, detail="الشاليه غير موجود")
     await chalets_col.update_one({"id": chalet_id}, {"$set": {"status": status}})
+
+    # Notify owner of approval/rejection/suspension
+    titles = {
+        "approved": "تم اعتماد شاليهك",
+        "rejected": "تم رفض الشاليه",
+        "suspended": "تم تعليق الشاليه",
+        "pending": "الشاليه قيد المراجعة",
+    }
+    msgs = {
+        "approved": f"تهانينا! شاليه {chalet['name']} متاح الآن للعملاء.",
+        "rejected": f"تم رفض شاليه {chalet['name']}. تواصل مع الإدارة للتفاصيل.",
+        "suspended": f"تم تعليق شاليه {chalet['name']} مؤقتاً.",
+        "pending": f"شاليه {chalet['name']} عاد إلى قائمة المراجعة.",
+    }
+    await push_notification(
+        chalet["owner_id"], "owner",
+        f"chalet_{status}",
+        titles[status], msgs[status],
+        link="/owner/dashboard",
+    )
+    return {"ok": True}
+
+
+@api.delete("/admin/chalets/{chalet_id}")
+async def admin_delete_chalet(chalet_id: str, user: dict = Depends(require_role("admin"))):
+    doc = await chalets_col.find_one({"id": chalet_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="الشاليه غير موجود")
+    await chalets_col.delete_one({"id": chalet_id})
+    await slots_col.delete_many({"chalet_id": chalet_id})
     return {"ok": True}
 
 
 @api.get("/admin/reviews")
-async def admin_reviews(
-    reported_only: bool = False,
-    user: dict = Depends(require_role("admin")),
-):
+async def admin_reviews(reported_only: bool = False, user: dict = Depends(require_role("admin"))):
     query = {"reported": True} if reported_only else {}
-    cursor = reviews_col.find(query, {"_id": 0}).sort([("created_at", -1)])
-    return await cursor.to_list(length=500)
+    return await reviews_col.find(query, {"_id": 0}).sort([("created_at", -1)]).to_list(length=500)
 
 
 @api.get("/admin/users")
 async def admin_users(user: dict = Depends(require_role("admin"))):
-    cursor = users_col.find({}, {"_id": 0, "password_hash": 0}).sort(
-        [("created_at", -1)]
-    )
-    return await cursor.to_list(length=500)
+    return await users_col.find({}, {"_id": 0, "password_hash": 0}).sort([("created_at", -1)]).to_list(length=500)
 
 
 @api.get("/admin/bookings")
 async def admin_bookings(user: dict = Depends(require_role("admin"))):
-    cursor = bookings_col.find({}, {"_id": 0}).sort([("created_at", -1)])
-    return await cursor.to_list(length=500)
+    return await bookings_col.find({}, {"_id": 0}).sort([("created_at", -1)]).to_list(length=500)
 
 
 # Register router and middleware

@@ -11,6 +11,7 @@ import CustomerLogin from "./pages/CustomerLogin";
 import OwnerAuth from "./pages/OwnerAuth";
 import OwnerDashboard from "./pages/OwnerDashboard";
 import OwnerChaletForm from "./pages/OwnerChaletForm";
+import OwnerSlotsPage from "./pages/OwnerSlotsPage";
 import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
 import MyBookings from "./pages/MyBookings";
@@ -50,6 +51,14 @@ function App() {
               element={
                 <ProtectedRoute roles={["owner"]}>
                   <OwnerChaletForm />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/owner/chalets/:id/slots"
+              element={
+                <ProtectedRoute roles={["owner"]}>
+                  <OwnerSlotsPage />
                 </ProtectedRoute>
               }
             />
