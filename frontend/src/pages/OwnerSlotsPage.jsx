@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Calendar, Clock, Plus, Trash2, ArrowRight, Lock, Tag, Ban } from "lucide-react";
 import { toast } from "sonner";
@@ -39,14 +39,16 @@ export default function OwnerSlotsPage() {
   const [notes, setNotes] = useState("");
   const [blockReason, setBlockReason] = useState("personal");
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const c = await api.get(`/chalets/${id}`);
     setChalet(c.data);
     const s = await api.get(`/chalets/${id}/slots`);
     setSlots(s.data);
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+  load();
+}, [id, load]);
 
   const submit = async (e) => {
     e.preventDefault();
